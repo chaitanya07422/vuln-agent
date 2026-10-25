@@ -6,6 +6,7 @@ import httpx
 
 from vuln_agent.tools.dns import DnsLookupTool, MxLookupTool
 from vuln_agent.tools.ports import PortProbeTool
+from vuln_agent.tools.rate_limit import AsyncRateLimiter
 
 
 class HttpRequestTool:
@@ -18,11 +19,13 @@ class HttpRequestTool:
         user_agent: str = "vuln-agent/0.1",
         follow_redirects: bool = True,
         max_redirects: int = 5,
+        rate_limiter: AsyncRateLimiter | None = None,
     ) -> None:
         self.timeout_sec = timeout_sec
         self.user_agent = user_agent
         self.follow_redirects = follow_redirects
         self.max_redirects = max_redirects
+        self.rate_limiter = rate_limiter
 
     async def __call__(
         self,
@@ -33,6 +36,9 @@ class HttpRequestTool:
         body: Optional[str] = None,
         max_body_bytes: int = 200_000,
     ) -> dict:
+        if self.rate_limiter:
+            await self.rate_limiter.acquire()
+
         req_headers = {"User-Agent": self.user_agent}
         if headers:
             req_headers.update(headers)

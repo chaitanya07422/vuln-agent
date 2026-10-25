@@ -13,6 +13,7 @@ from vuln_agent.llm.router import LLMRouter
 from vuln_agent.playbook_loader import PlaybookStore, default_playbook_store
 from vuln_agent.settings import Settings
 from vuln_agent.tools.http import HttpRequestTool, ToolBus
+from vuln_agent.tools.rate_limit import AsyncRateLimiter
 
 
 def _utc_now() -> str:
@@ -75,11 +76,13 @@ class LeadRunner:
         self.llm = llm or LLMRouter()
 
     def _tools(self) -> ToolBus:
+        limiter = AsyncRateLimiter(self.settings.limits.max_rps)
         http = HttpRequestTool(
             timeout_sec=self.settings.limits.request_timeout_sec,
             user_agent=self.settings.http.user_agent,
             follow_redirects=self.settings.http.follow_redirects,
             max_redirects=self.settings.http.max_redirects,
+            rate_limiter=limiter,
         )
         return ToolBus(http)
 
