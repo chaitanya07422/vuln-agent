@@ -29,6 +29,16 @@ OBJECT_PREFIXES = [
     "/media/uploads/",
 ]
 
+# Path must look like an upload surface — avoid substring traps ("file" ⊂ "profile")
+_UPLOAD_PATH = re.compile(
+    r"(?:^|/)(?:uploads?|presign|files?)(?:/|$)|request-url|multipart",
+    re.I,
+)
+
+
+def _is_upload_path(path: str) -> bool:
+    return bool(_UPLOAD_PATH.search(path or ""))
+
 
 def _homepage_sig(body: str, headers: Dict[str, str]) -> Dict[str, Any]:
     title_m = re.search(r"<title[^>]*>(.*?)</title>", body or "", re.I | re.S)
@@ -60,6 +70,24 @@ def _is_spa_shell(body: str, headers: Dict[str, str], home: Optional[Dict[str, A
     return False
 
 
+def _is_json_api_body(body: str, headers: Dict[str, str]) -> bool:
+    """Upload/presign findings require a JSON API response — never HTML theme pages."""
+    if looks_like_html_document(body, headers):
+        return False
+    ct = (headers.get("content-type") or headers.get("Content-Type") or "").lower()
+    stripped = (body or "").lstrip()
+    return "json" in ct or stripped.startswith("{") or stripped.startswith("[")
+
+
+def _auth_gated_json(status: int, body: str, headers: Dict[str, str]) -> bool:
+    if status not in (401, 403):
+        return False
+    if not _is_json_api_body(body, headers):
+        return False
+    # WordPress HTML often contains "Log in" in the nav — never use that on HTML
+    return True
+
+
 class UploadAgent(BaseAgent):
     name = "upload"
     requires_tags: list = []
@@ -79,11 +107,19 @@ class UploadAgent(BaseAgent):
         ctx.fingerprint = dict(ctx.fingerprint or {})
         ctx.fingerprint["homepage_sig"] = home_sig
 
+        # Evidence-first path set (works for any future URL):
+        # 1) paths seen in JS  2) common candidates  3) accept ONLY JSON API replies
+        js_hint_paths = list((ctx.fingerprint or {}).get("js_api_paths") or [])
         discovered: Set[str] = set(PRESIGN_CANDIDATES)
+        discovered.update(p for p in js_hint_paths if _is_upload_path(p) or "/objects/" in p.lower())
         object_samples: List[str] = []
 
         for script in script_urls(home_body, ctx.url):
-            js = await ctx.tools.http_request(method="GET", url=script)
+            js = await ctx.tools.http_request(
+                method="GET",
+                url=script,
+                max_body_bytes=2_500_000,
+            )
             await ctx.audit_event(agent=self.name, tool="http_request", url=script, ok=js.get("ok"))
             if not js.get("ok"):
                 continue
@@ -92,15 +128,14 @@ class UploadAgent(BaseAgent):
                 discovered.add(p)
             object_samples.extend(extract_object_upload_urls(text))
 
-        # 1) Presign / upload API probes (JSON only — not SPA HTML)
+        # 1) Presign / upload probes — HTML theme/CMS pages never count (any stack)
         probed_presign = False
         for path in sorted(discovered):
-            if "upload" not in path.lower() and "presign" not in path.lower() and "file" not in path.lower():
+            if not _is_upload_path(path):
                 continue
             if path.count("/") < 2:
                 continue
             target = urljoin(ctx.url if ctx.url.endswith("/") else ctx.url + "/", path.lstrip("/"))
-            # Prefer POST for request-url style endpoints
             method = "POST" if "request" in path or "presign" in path or path.endswith("upload") else "GET"
             body = None
             headers = {"Accept": "application/json"}
@@ -118,19 +153,18 @@ class UploadAgent(BaseAgent):
             await ctx.audit_event(agent=self.name, tool="http_request", url=target, ok=resp.get("ok"))
             if not resp.get("ok"):
                 continue
-            status = resp.get("status_code")
+            status = int(resp.get("status_code") or 0)
             rbody = resp.get("body") or ""
             rheaders = resp.get("headers") or {}
             if _is_spa_shell(rbody, rheaders, home_sig):
                 continue
-            ct = (rheaders.get("content-type") or rheaders.get("Content-Type") or "").lower()
-            is_json = "json" in ct or rbody.strip().startswith("{") or rbody.strip().startswith("[")
-            if not is_json and status not in (401, 403):
+            if looks_like_html_document(rbody, rheaders):
+                continue
+            if not _is_json_api_body(rbody, rheaders):
                 continue
 
             probed_presign = True
-            lower = rbody.lower()
-            if status in (401, 403) or "log in" in lower or "login" in lower or "unauthorized" in lower:
+            if _auth_gated_json(status, rbody, rheaders):
                 await ctx.emit_finding(
                     Finding(
                         agent=self.name,
@@ -142,8 +176,7 @@ class UploadAgent(BaseAgent):
                         tags=["upload", "presign", "api"],
                     )
                 )
-            elif status == 200 and is_json:
-                # Unauthenticated presign success = critical
+            elif status == 200:
                 await ctx.emit_finding(
                     Finding(
                         agent=self.name,
@@ -155,33 +188,6 @@ class UploadAgent(BaseAgent):
                         tags=["upload", "presign", "unauth"],
                     )
                 )
-
-        if not probed_presign:
-            # still try canonical path
-            path = "/api/uploads/request-url"
-            target = urljoin(ctx.url if ctx.url.endswith("/") else ctx.url + "/", path.lstrip("/"))
-            resp = await ctx.tools.http_request(
-                method="POST",
-                url=target,
-                headers={"Content-Type": "application/json", "Accept": "application/json"},
-                body='{"name":"resume.pdf","size":1,"contentType":"application/pdf"}',
-            )
-            await ctx.audit_event(agent=self.name, tool="http_request", url=target, ok=resp.get("ok"))
-            rbody = resp.get("body") or ""
-            if resp.get("ok") and not _is_spa_shell(rbody, resp.get("headers") or {}, home_sig):
-                status = resp.get("status_code")
-                if status in (401, 403) or "log in" in rbody.lower():
-                    await ctx.emit_finding(
-                        Finding(
-                            agent=self.name,
-                            severity="medium",
-                            title="Upload/presign API present (auth required): /api/uploads/request-url",
-                            evidence_url=target,
-                            evidence_snippet=f"HTTP {status}; {rbody[:240]}",
-                            fix="Keep auth; enforce MIME/size allowlists; don't serve user HTML on the app origin.",
-                            tags=["upload", "presign", "api"],
-                        )
-                    )
 
         # 2) Object serve route: missing UUID → JSON 404 proves route; non-SPA HTML → critical
         for prefix in OBJECT_PREFIXES:
