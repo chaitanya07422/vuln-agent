@@ -1,0 +1,88 @@
+tech_tags: [generic]
+leaks:
+  - path: /.env
+    severity: critical
+    title: "Exposed .env file"
+    finding_if_status: [200]
+    finding_if_body_contains: ["=", "SECRET", "KEY", "PASSWORD", "TOKEN"]
+    fix: "Remove public access to .env; rotate any exposed secrets."
+  - path: /.git/HEAD
+    severity: high
+    title: "Exposed Git metadata"
+    finding_if_status: [200]
+    finding_if_body_contains: ["ref:"]
+    fix: "Block /.git from public web roots."
+  - path: /.git/config
+    severity: high
+    title: "Exposed Git config"
+    finding_if_status: [200]
+    finding_if_body_contains: ["[core]", "[remote"]
+    fix: "Block /.git from public web roots."
+  - path: /backup.zip
+    severity: high
+    title: "Public backup archive"
+    finding_if_status: [200]
+    fix: "Remove backup archives from the web root."
+  - path: /swagger.json
+    severity: medium
+    title: "Public Swagger/OpenAPI document"
+    finding_if_status: [200]
+    finding_if_body_contains: ["swagger", "openapi", "paths"]
+    fix: "Restrict API docs to trusted networks or auth."
+  - path: /openapi.json
+    severity: medium
+    title: "Public OpenAPI document"
+    finding_if_status: [200]
+    finding_if_body_contains: ["openapi", "paths"]
+    fix: "Restrict API docs to trusted networks or auth."
+  - path: /api/docs
+    severity: medium
+    title: "Public API docs UI"
+    finding_if_status: [200]
+    finding_if_body_contains: ["swagger", "redoc", "openapi"]
+    fix: "Disable public /docs in production."
+  - path: /docs
+    severity: low
+    title: "Public /docs endpoint"
+    finding_if_status: [200]
+    finding_if_body_contains: ["swagger", "redoc", "fastapi"]
+    fix: "Disable interactive docs in production."
+  - path: /server-status
+    severity: medium
+    title: "Apache server-status exposed"
+    finding_if_status: [200]
+    finding_if_body_contains: ["Apache Server Status", "Scoreboard"]
+    fix: "Disable mod_status publicly."
+  - path: /phpinfo.php
+    severity: high
+    title: "phpinfo exposed"
+    finding_if_status: [200]
+    finding_if_body_contains: ["phpinfo()", "PHP Version"]
+    fix: "Remove phpinfo scripts from production."
+cors_api:
+  - path: /
+    severity: high
+    title: "CORS reflects arbitrary Origin"
+    origin: "https://evil.example"
+    finding_if_header_contains:
+      access-control-allow-origin: "https://evil.example"
+    fix: "Reflect only trusted origins; never echo arbitrary Origin with credentials."
+upload:
+  - path: /api/upload
+    method: GET
+    severity: medium
+    title: "Upload API path responds"
+    finding_if_status: [200, 401, 403]
+    fix: "Require auth and validate file types for uploads."
+  - path: /upload
+    method: GET
+    severity: medium
+    title: "Upload path responds"
+    finding_if_status: [200, 401, 403]
+    fix: "Require auth on upload endpoints."
+uat_app:
+  - path_from_html: true
+    patterns: ["uat.", "staging.", "stage.", "dev.", "test."]
+    severity: medium
+    title: "Staging/UAT host linked from production"
+    fix: "Remove staging links from production HTML or gate with auth + IP allowlists."

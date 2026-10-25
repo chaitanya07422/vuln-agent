@@ -4,6 +4,9 @@ from typing import Any, Dict, Optional
 
 import httpx
 
+from vuln_agent.tools.dns import DnsLookupTool, MxLookupTool
+from vuln_agent.tools.ports import PortProbeTool
+
 
 class HttpRequestTool:
     name = "http_request"
@@ -73,8 +76,22 @@ class HttpRequestTool:
 class ToolBus:
     """Named tools agents call via ctx.tools.<name>(...)."""
 
-    def __init__(self, http: HttpRequestTool) -> None:
+    def __init__(
+        self,
+        http: HttpRequestTool,
+        dns: DnsLookupTool | None = None,
+        mx: MxLookupTool | None = None,
+        ports: PortProbeTool | None = None,
+    ) -> None:
         self.http_request = http
+        self.dns_lookup = dns or DnsLookupTool()
+        self.mx_lookup = mx or MxLookupTool()
+        self.port_probe = ports or PortProbeTool()
 
     def as_dict(self) -> Dict[str, Any]:
-        return {"http_request": self.http_request}
+        return {
+            "http_request": self.http_request,
+            "dns_lookup": self.dns_lookup,
+            "mx_lookup": self.mx_lookup,
+            "port_probe": self.port_probe,
+        }

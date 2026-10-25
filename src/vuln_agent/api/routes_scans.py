@@ -60,3 +60,13 @@ async def get_report(scan_id: str, request: Request) -> PlainTextResponse:
     if not md:
         raise HTTPException(status_code=409, detail="report not ready")
     return PlainTextResponse(md, media_type="text/markdown")
+
+
+@router.get("/{scan_id}/audit.json")
+async def get_audit(scan_id: str, request: Request) -> Dict[str, Any]:
+    store = request.app.state.store
+    try:
+        scan = await store.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    return {"id": scan_id, "audit": scan.get("audit") or []}

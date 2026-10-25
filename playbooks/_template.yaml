@@ -1,0 +1,8 @@
+# Copy to playbooks/<tech>.yaml — agents load steps by section name.
+tech_tags: []
+users: []
+auth: []
+leaks: []
+cors_api: []
+upload: []
+uat_app: []
