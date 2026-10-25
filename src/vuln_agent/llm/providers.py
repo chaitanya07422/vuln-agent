@@ -69,29 +69,49 @@ class ClaudeProvider:
 class GeminiProvider:
     name = "gemini"
 
-    def __init__(self, api_key: str, model: str = "gemini-2.0-flash") -> None:
+    def __init__(self, api_key: str, model: str = "gemini-flash-latest") -> None:
         self.api_key = api_key
         self.model = model
 
     async def complete(self, prompt: str, *, system: Optional[str] = None) -> str:
         text = f"{system}\n\n{prompt}" if system else prompt
-        url = (
-            f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"{self.model}:generateContent?key={self.api_key}"
-        )
+        # Prefer configured model, then current Flash aliases
+        models = [self.model]
+        for alt in ("gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash"):
+            if alt not in models:
+                models.append(alt)
+
+        last_err: Optional[Exception] = None
         async with httpx.AsyncClient(timeout=45.0) as client:
-            resp = await client.post(
-                url,
-                headers={"content-type": "application/json"},
-                json={"contents": [{"parts": [{"text": text}]}]},
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            candidates = data.get("candidates") or []
-            if not candidates:
-                return ""
-            parts = candidates[0].get("content", {}).get("parts") or []
-            return "".join(p.get("text", "") for p in parts).strip()
+            for model in models:
+                url = (
+                    f"https://generativelanguage.googleapis.com/v1beta/models/"
+                    f"{model}:generateContent?key={self.api_key}"
+                )
+                try:
+                    resp = await client.post(
+                        url,
+                        headers={"content-type": "application/json"},
+                        json={"contents": [{"parts": [{"text": text}]}]},
+                    )
+                    if resp.status_code == 404:
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    candidates = data.get("candidates") or []
+                    if not candidates:
+                        continue
+                    parts = candidates[0].get("content", {}).get("parts") or []
+                    out = "".join(p.get("text", "") for p in parts).strip()
+                    if out:
+                        self.model = model
+                        return out
+                except Exception as exc:  # noqa: BLE001
+                    last_err = exc
+                    continue
+        if last_err:
+            raise last_err
+        return ""
 
 
 def build_provider(name: Optional[str]):
@@ -120,7 +140,7 @@ def build_provider(name: Optional[str]):
         )
         if not api_key:
             return NullLLM()
-        model = os.getenv("VULN_AGENT_GEMINI_MODEL", "gemini-2.0-flash")
+        model = os.getenv("VULN_AGENT_GEMINI_MODEL", "gemini-flash-latest")
         return GeminiProvider(api_key, model=model)
 
     return NullLLM()

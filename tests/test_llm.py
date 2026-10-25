@@ -41,11 +41,21 @@ async def test_router_falls_back_when_primary_empty():
 
 
 @pytest.mark.asyncio
-async def test_factory_without_keys_uses_null():
+async def test_factory_without_keys_uses_null(monkeypatch):
+    for key in (
+        "ANTHROPIC_API_KEY",
+        "VULN_AGENT_ANTHROPIC_API_KEY",
+        "OPENAI_API_KEY",
+        "VULN_AGENT_OPENAI_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "VULN_AGENT_GEMINI_API_KEY",
+    ):
+        monkeypatch.delenv(key, raising=False)
     router = build_llm_router(
         {"lead": "claude", "adapt": "gemini-flash", "reporter": "openai", "fallback": "openai"}
     )
-    # No API keys in test env → null providers
+    # No API keys → null providers
     assert router.provider_name("lead") == "null"
     assert router.provider_name("adapt") == "null"
     assert await router.complete("reporter", "x") == ""
