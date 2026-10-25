@@ -4,6 +4,7 @@ leaks:
     severity: info
     title: "API root responds"
     finding_if_status: [200, 401, 403]
+    # SPA HTML catch-all is rejected in runner for /api when html
     fix: "Ensure API roots do not leak stack traces."
   - path: /api/v1
     severity: info
@@ -13,13 +14,14 @@ leaks:
     severity: critical
     title: "Exposed .env on Node/Nest host"
     finding_if_status: [200]
-    finding_if_body_contains: ["=", "SECRET", "DATABASE"]
+    finding_if_body_contains: ["="]
     fix: "Never serve .env; rotate secrets."
 cors_api:
   - path: /api
     severity: high
     title: "API CORS reflects arbitrary Origin"
     origin: "https://evil.example"
+    reject_html: false
     finding_if_header_contains:
       access-control-allow-origin: "https://evil.example"
     fix: "Allowlist origins for the API."

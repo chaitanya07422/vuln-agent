@@ -4,7 +4,8 @@ leaks:
     severity: critical
     title: "Exposed .env file"
     finding_if_status: [200]
-    finding_if_body_contains: ["=", "SECRET", "KEY", "PASSWORD", "TOKEN"]
+    # Content validated in code (dotenv KEY=VALUE); keep tokens as secondary hint
+    finding_if_body_contains: ["="]
     fix: "Remove public access to .env; rotate any exposed secrets."
   - path: /.git/HEAD
     severity: high
@@ -16,7 +17,7 @@ leaks:
     severity: high
     title: "Exposed Git config"
     finding_if_status: [200]
-    finding_if_body_contains: ["[core]", "[remote"]
+    finding_if_body_contains: ["[core]"]
     fix: "Block /.git from public web roots."
   - path: /backup.zip
     severity: high
@@ -27,13 +28,15 @@ leaks:
     severity: medium
     title: "Public Swagger/OpenAPI document"
     finding_if_status: [200]
-    finding_if_body_contains: ["swagger", "openapi", "paths"]
+    finding_if_body_contains: ["paths"]
+    finding_if_body_mode: any
     fix: "Restrict API docs to trusted networks or auth."
   - path: /openapi.json
     severity: medium
     title: "Public OpenAPI document"
     finding_if_status: [200]
     finding_if_body_contains: ["openapi", "paths"]
+    finding_if_body_mode: all
     fix: "Restrict API docs to trusted networks or auth."
   - path: /api/docs
     severity: medium
@@ -51,19 +54,20 @@ leaks:
     severity: medium
     title: "Apache server-status exposed"
     finding_if_status: [200]
-    finding_if_body_contains: ["Apache Server Status", "Scoreboard"]
+    finding_if_body_contains: ["Scoreboard"]
     fix: "Disable mod_status publicly."
   - path: /phpinfo.php
     severity: high
     title: "phpinfo exposed"
     finding_if_status: [200]
-    finding_if_body_contains: ["phpinfo()", "PHP Version"]
+    finding_if_body_contains: ["PHP Version"]
     fix: "Remove phpinfo scripts from production."
 cors_api:
   - path: /
     severity: high
     title: "CORS reflects arbitrary Origin"
     origin: "https://evil.example"
+    reject_html: false
     finding_if_header_contains:
       access-control-allow-origin: "https://evil.example"
     fix: "Reflect only trusted origins; never echo arbitrary Origin with credentials."

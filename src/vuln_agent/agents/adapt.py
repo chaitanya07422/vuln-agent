@@ -5,6 +5,11 @@ from typing import List
 from urllib.parse import urljoin
 
 from vuln_agent.agents.base import BaseAgent
+from vuln_agent.agents.content_guards import (
+    looks_like_dotenv,
+    looks_like_git_head,
+    looks_like_html_document,
+)
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
 from vuln_agent.tools.safety import url_is_safe_target
@@ -30,7 +35,6 @@ def parse_paths_from_llm(text: str, limit: int = 8) -> List[str]:
             if not m:
                 continue
             line = m.group(1)
-        # single path only, no scheme/host
         if "://" in line or line.startswith("//"):
             continue
         path = line.split()[0]
@@ -41,6 +45,29 @@ def parse_paths_from_llm(text: str, limit: int = 8) -> List[str]:
         if len(paths) >= limit:
             break
     return paths
+
+
+def _interesting(path: str, status: int, body: str, headers: dict) -> bool:
+    if status != 200:
+        return False
+    # SPA soft-404: never treat HTML shell as a hit
+    if looks_like_html_document(body, headers):
+        return False
+
+    path_l = path.lower()
+    if path_l.endswith("head") or ".git/head" in path_l:
+        return looks_like_git_head(body)
+    if path_l.endswith(".env") or "/.env" in path_l:
+        return looks_like_dotenv(body)
+    if "graphql" in path_l:
+        lower = body.lower()
+        return any(x in lower for x in ("__schema", "graphql", '"data"', "must provide query"))
+    if "actuator" in path_l:
+        return "{" in body[:300] and not looks_like_html_document(body, headers)
+    if "server-status" in path_l:
+        return "scoreboard" in body.lower() or "apache server status" in body.lower()
+    # generic unknown path: require non-HTML with some substance
+    return len(body) > 40
 
 
 class AdaptAgent(BaseAgent):
@@ -65,7 +92,6 @@ class AdaptAgent(BaseAgent):
                     system="You propose safe detect-only web paths. Never suggest password sprays.",
                 )
                 llm_paths = parse_paths_from_llm(text, limit=limit)
-                # Prefer LLM paths first, then fill from heuristics
                 merged: List[str] = []
                 for p in llm_paths + paths:
                     if p not in merged:
@@ -95,20 +121,10 @@ class AdaptAgent(BaseAgent):
             await ctx.audit_event(agent=self.name, tool="http_request", url=target, ok=resp.get("ok"))
             if not resp.get("ok"):
                 continue
-            status = resp.get("status_code")
-            body = (resp.get("body") or "")[:300]
-            interesting = status == 200 and len(body) > 20
-            if path.endswith("HEAD") and "ref:" in body:
-                interesting = True
-            if path.endswith(".env") and "=" in body and status == 200:
-                interesting = True
-            if "graphql" in path.lower() and status == 200 and (
-                "graphql" in body.lower() or "__schema" in body.lower() or "query" in body.lower()
-            ):
-                interesting = True
-            if "actuator" in path and status == 200:
-                interesting = True
-            if not interesting:
+            status = resp.get("status_code") or 0
+            body = resp.get("body") or ""
+            headers = resp.get("headers") or {}
+            if not _interesting(path, int(status), body, headers):
                 continue
             sev = "high" if any(x in path for x in (".env", ".git", "actuator/env")) else "medium"
             await ctx.emit_finding(
