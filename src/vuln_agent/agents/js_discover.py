@@ -23,7 +23,7 @@ def script_urls(html: str, base_url: str) -> List[str]:
         if src.startswith("data:"):
             continue
         out.append(urljoin(base_url, src))
-    return out[:6]
+    return out[:12]
 
 
 def extract_api_paths(js_text: str) -> List[str]:

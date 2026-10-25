@@ -13,6 +13,7 @@ AGENT_ENTRYPOINTS: Dict[str, str] = {
     "leaks": "vuln_agent.agents.leaks:LeaksAgent",
     "cors_api": "vuln_agent.agents.cors_api:CorsApiAgent",
     "upload": "vuln_agent.agents.upload:UploadAgent",
+    "js_audit": "vuln_agent.agents.js_audit:JsAuditAgent",
     "uat_app": "vuln_agent.agents.uat_app:UatAppAgent",
     "ports_mail": "vuln_agent.agents.ports_mail:PortsMailAgent",
     "adapt": "vuln_agent.agents.adapt:AdaptAgent",
