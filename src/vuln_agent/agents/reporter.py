@@ -4,6 +4,7 @@ from collections import Counter
 from typing import List
 
 from vuln_agent.agents.base import BaseAgent
+from vuln_agent.agents.dedupe import dedupe_findings
 from vuln_agent.agents.explain import enrich_findings_explanations
 from vuln_agent.agents.risk_path import build_risk_path
 from vuln_agent.core.context import ScanContext
@@ -84,6 +85,10 @@ class ReporterAgent(BaseAgent):
     skip_if_tags: list = []
 
     async def run(self, ctx: ScanContext) -> None:
+        # Collapse overlapping cards before LLM explain / risk story
+        before = len(ctx.findings)
+        ctx.findings = dedupe_findings(list(ctx.findings))
+        dropped = before - len(ctx.findings)
         enriched = await enrich_findings_explanations(ctx)
         ctx.risk_path = await build_risk_path(ctx)
         brief = build_company_brief(ctx)
@@ -124,7 +129,7 @@ class ReporterAgent(BaseAgent):
                 title="Report generated",
                 evidence_url=ctx.url,
                 evidence_snippet=(
-                    f"{len(ctx.findings)} findings; explained={enriched}; "
+                    f"{len(ctx.findings)} findings; deduped={dropped}; explained={enriched}; "
                     f"risk_path={'yes' if ctx.risk_path else 'no'}; llm={llm_name}"
                 ),
                 tags=["report"],

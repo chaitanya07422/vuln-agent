@@ -1,11 +1,43 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Keys providers read via os.getenv (not VULN_AGENT_* settings fields)
+_LLM_ENV_KEYS = (
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "VULN_AGENT_GEMINI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "VULN_AGENT_ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "VULN_AGENT_OPENAI_API_KEY",
+    "VULN_AGENT_GEMINI_MODEL",
+    "VULN_AGENT_CLAUDE_MODEL",
+    "VULN_AGENT_OPENAI_MODEL",
+)
+
+
+def _export_llm_keys_from_dotenv(path: Path) -> None:
+    """Ensure API keys in .env are visible to LLM providers via os.environ."""
+    if not path.is_file():
+        return
+    for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, val = line.partition("=")
+        key = key.strip()
+        if key not in _LLM_ENV_KEYS:
+            continue
+        val = val.strip().strip("'").strip('"')
+        if val and key not in os.environ:
+            os.environ[key] = val
 
 
 class Limits(BaseModel):
@@ -48,6 +80,8 @@ class Settings(BaseSettings):
 
     @classmethod
     def load(cls, config_path: str | None = None) -> "Settings":
+        _export_llm_keys_from_dotenv(Path.cwd() / ".env")
+        _export_llm_keys_from_dotenv(Path(__file__).resolve().parents[2] / ".env")
         base = cls()
         path = Path(config_path or base.config)
         if not path.is_file():

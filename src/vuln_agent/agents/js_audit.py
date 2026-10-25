@@ -114,31 +114,36 @@ class JsAuditAgent(BaseAgent):
         for rule in PATTERNS:
             if rule["regex"].search(sample):
                 matched_ids.add(rule["id"])
-                await ctx.emit_finding(
-                    Finding(
-                        agent=self.name,
-                        severity=rule["severity"],
-                        title=rule["title"],
-                        evidence_url=ctx.url,
-                        evidence_snippet=f"Pattern {rule['id']} matched in frontend JS bundle",
-                        fix=rule["fix"],
-                        tags=list(rule["tags"]),
-                    )
-                )
 
-        # Automatic chain  without login
-        if (
-            "upload_passthrough_ctype" in matched_ids
-            or ("client_only_accept" in matched_ids and "objects_uploads_path" in matched_ids)
-        ) and "objects_uploads_path" in matched_ids:
+        # Prefer one chain card over overlapping base patterns (avoids duplicate noise)
+        upload_chain = (
+            "objects_uploads_path" in matched_ids
+            and (
+                "upload_passthrough_ctype" in matched_ids
+                or "client_only_accept" in matched_ids
+            )
+        )
+        resume_chain = "open_href_resume" in matched_ids and "objects_uploads_path" in matched_ids
+        skip_ids: Set[str] = set()
+        if upload_chain:
+            skip_ids.update(
+                {
+                    "upload_passthrough_ctype",
+                    "client_only_accept",
+                    "objects_uploads_path",
+                }
+            )
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
                     severity="high",
                     title="Upload pipeline likely allows unsafe types + public object URLs",
-                    evidence_url=urljoin(ctx.url if ctx.url.endswith("/") else ctx.url + "/", "api/uploads/request-url"),
+                    evidence_url=urljoin(
+                        ctx.url if ctx.url.endswith("/") else ctx.url + "/",
+                        "api/uploads/request-url",
+                    ),
                     evidence_snippet=(
-                        "JS shows request-url + client MIME/accept and /objects/uploads references. "
+                        "JS shows request-url + client MIME/accept and upload/object URL references. "
                         "Verify server allowlists MIME and does not serve uploads as text/html."
                     ),
                     fix=(
@@ -148,8 +153,8 @@ class JsAuditAgent(BaseAgent):
                     tags=["js", "upload", "chain"],
                 )
             )
-
-        if "open_href_resume" in matched_ids and "objects_uploads_path" in matched_ids:
+        if resume_chain:
+            skip_ids.add("open_href_resume")
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
@@ -159,6 +164,21 @@ class JsAuditAgent(BaseAgent):
                     evidence_snippet="JS binds href to resumePath while uploads land under object URLs",
                     fix="Validate resumePath; open via authenticated download endpoint only.",
                     tags=["js", "resumePath", "phishing"],
+                )
+            )
+
+        for rule in PATTERNS:
+            if rule["id"] not in matched_ids or rule["id"] in skip_ids:
+                continue
+            await ctx.emit_finding(
+                Finding(
+                    agent=self.name,
+                    severity=rule["severity"],
+                    title=rule["title"],
+                    evidence_url=ctx.url,
+                    evidence_snippet=f"Pattern {rule['id']} matched in frontend JS bundle",
+                    fix=rule["fix"],
+                    tags=list(rule["tags"]),
                 )
             )
 
@@ -203,6 +223,11 @@ class JsAuditAgent(BaseAgent):
                             "auth",
                         )
                     ):
+                        continue
+                    # Skip LLM echoes of patterns/chains we already emitted
+                    if upload_chain and any(x in blob for x in ("upload", "mime", "presign", "accept", "object")):
+                        continue
+                    if resume_chain and "resume" in blob:
                         continue
                     await ctx.emit_finding(
                         Finding(
