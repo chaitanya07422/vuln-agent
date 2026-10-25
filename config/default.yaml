@@ -1,12 +1,27 @@
 enabled_agents:
   - recon
+  - users
+  - auth
+  - leaks
+  - cors_api
+  - upload
+  - uat_app
+  - ports_mail
+  - adapt
+  - reporter
 
 limits:
   max_rps: 5
   request_timeout_sec: 15
-  scan_timeout_sec: 120
+  scan_timeout_sec: 180
 
 http:
   user_agent: "vuln-agent/0.1 (+authorized-scan)"
   follow_redirects: true
   max_redirects: 5
+
+llm:
+  lead: null
+  adapt: null
+  reporter: null
+  fallback: null

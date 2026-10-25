@@ -1,0 +1,45 @@
+tech_tags: [wordpress]
+users:
+  - method: GET
+    path: /wp-json/wp/v2/users?per_page=100
+    severity: high
+    title: "Public WordPress user enumeration"
+    finding_if_status: [200]
+    finding_if_body_contains: ["slug", "name"]
+    fix: "Disable public user REST enumeration or require auth."
+auth:
+  - method: POST
+    path: /xmlrpc.php
+    body: "<?xml version=\"1.0\"?><methodCall><methodName>system.listMethods</methodName></methodCall>"
+    headers:
+      Content-Type: text/xml
+    severity: high
+    title: "WordPress XML-RPC enabled"
+    finding_if_status: [200]
+    finding_if_body_contains: ["system.multicall", "wp.getUsersBlogs", "methodResponse"]
+    fix: "Disable xmlrpc.php if unused; rate-limit and block multicall."
+leaks:
+  - path: /readme.html
+    severity: low
+    title: "WordPress readme.html exposed"
+    finding_if_status: [200]
+    finding_if_body_contains: ["WordPress", "Version"]
+    fix: "Remove readme.html from production."
+  - path: /wp-config.php.bak
+    severity: critical
+    title: "Backup wp-config exposed"
+    finding_if_status: [200]
+    finding_if_body_contains: ["DB_PASSWORD", "DB_NAME"]
+    fix: "Delete config backups from the web root; rotate DB credentials."
+  - path: /wp-config.php~
+    severity: critical
+    title: "Editor backup of wp-config exposed"
+    finding_if_status: [200]
+    finding_if_body_contains: ["DB_PASSWORD", "DB_NAME"]
+    fix: "Delete editor backup files; rotate credentials."
+  - path: /license.txt
+    severity: info
+    title: "WordPress license.txt present"
+    finding_if_status: [200]
+    finding_if_body_contains: ["WordPress"]
+    fix: "Optional: remove version-hinting static files."

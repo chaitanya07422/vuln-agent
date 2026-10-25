@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from uuid import uuid4
 
 from vuln_agent.core.context import ScanContext, Scope
 from vuln_agent.core.finding import Finding
 from vuln_agent.core.registry import load_agents
+from vuln_agent.llm.router import LLMRouter
+from vuln_agent.playbook_loader import PlaybookStore, default_playbook_store
 from vuln_agent.settings import Settings
 from vuln_agent.tools.http import HttpRequestTool, ToolBus
 
@@ -17,6 +20,8 @@ def _utc_now() -> str:
 
 
 def render_markdown(scan: Dict[str, Any]) -> str:
+    if scan.get("report_md"):
+        return scan["report_md"]
     lines = [
         f"# Scan report — {scan.get('url')}",
         "",
@@ -27,7 +32,7 @@ def render_markdown(scan: Dict[str, Any]) -> str:
         "",
         "## Fingerprint",
         "",
-        f"```json\n{scan.get('fingerprint')}\n```",
+        f"```json\n{json.dumps(scan.get('fingerprint') or {}, indent=2)}\n```",
         "",
         "## Findings",
         "",
@@ -57,9 +62,17 @@ def render_markdown(scan: Dict[str, Any]) -> str:
 
 
 class LeadRunner:
-    def __init__(self, settings: Settings, store: Any) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        store: Any,
+        playbooks: PlaybookStore | None = None,
+        llm: LLMRouter | None = None,
+    ) -> None:
         self.settings = settings
         self.store = store
+        self.playbooks = playbooks or default_playbook_store(settings.config)
+        self.llm = llm or LLMRouter()
 
     def _tools(self) -> ToolBus:
         http = HttpRequestTool(
@@ -95,13 +108,20 @@ class LeadRunner:
     async def _run(self, scan_id: str, url: str, scope: Scope) -> None:
         await self.store.update(scan_id, status="running")
         tools = self._tools()
-        ctx = ScanContext(scan_id=scan_id, url=url, scope=scope, tools=tools)
+        ctx = ScanContext(
+            scan_id=scan_id,
+            url=url,
+            scope=scope,
+            tools=tools,
+            playbooks=self.playbooks,
+            llm=self.llm,
+        )
 
         try:
             agents = load_agents(self.settings.enabled_agents)
-            # recon barrier first
             recon = [a for a in agents if a.name == "recon"]
-            others = [a for a in agents if a.name != "recon"]
+            reporter = [a for a in agents if a.name == "reporter"]
+            mid = [a for a in agents if a.name not in ("recon", "reporter")]
 
             for agent in recon:
                 await agent.run(ctx)
@@ -115,33 +135,37 @@ class LeadRunner:
                     return
                 await agent.run(ctx)
 
-            if others:
+            if mid:
                 await asyncio.wait_for(
-                    asyncio.gather(*[_maybe_run(a) for a in others]),
+                    asyncio.gather(*[_maybe_run(a) for a in mid]),
                     timeout=self.settings.limits.scan_timeout_sec,
                 )
 
+            for agent in reporter:
+                await agent.run(ctx)
+
             findings = [f.model_dump() if isinstance(f, Finding) else f for f in ctx.findings]
-            report = {
-                "id": scan_id,
-                "url": url,
-                "status": "done",
-                "created_at": (await self.store.get(scan_id))["created_at"],
-                "finished_at": _utc_now(),
-                "fingerprint": ctx.fingerprint,
-                "findings": findings,
-            }
-            md = render_markdown(report)
+            md = ctx.report_md or render_markdown(
+                {
+                    "id": scan_id,
+                    "url": url,
+                    "status": "done",
+                    "created_at": (await self.store.get(scan_id))["created_at"],
+                    "finished_at": _utc_now(),
+                    "fingerprint": ctx.fingerprint,
+                    "findings": findings,
+                }
+            )
             await self.store.update(
                 scan_id,
                 status="done",
-                finished_at=report["finished_at"],
+                finished_at=_utc_now(),
                 fingerprint=ctx.fingerprint,
                 findings=findings,
                 audit=ctx.audit,
                 report_md=md,
             )
-        except Exception as exc:  # noqa: BLE001 — surface to scan record
+        except Exception as exc:  # noqa: BLE001
             await self.store.update(
                 scan_id,
                 status="failed",

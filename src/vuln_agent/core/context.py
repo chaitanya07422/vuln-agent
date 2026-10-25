@@ -31,6 +31,9 @@ class ScanContext:
     fingerprint: Dict[str, Any] = field(default_factory=dict)
     findings: List[Finding] = field(default_factory=list)
     audit: List[Dict[str, Any]] = field(default_factory=list)
+    playbooks: Any = None
+    llm: Any = None
+    report_md: Optional[str] = None
     emit: Optional[Callable[[Finding], Awaitable[None]]] = None
     record_audit: Optional[Callable[..., Awaitable[None]]] = None
 

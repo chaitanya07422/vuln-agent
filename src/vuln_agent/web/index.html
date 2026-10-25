@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>vuln-agent</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg0: #0c1210;
+      --bg1: #14201a;
+      --ink: #e7f0ea;
+      --muted: #8fa396;
+      --accent: #3dba7c;
+      --warn: #e0a35b;
+      --line: rgba(231, 240, 234, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 500px at 10% -10%, #1c3a2c 0%, transparent 60%),
+        radial-gradient(700px 400px at 100% 0%, #243528 0%, transparent 50%),
+        linear-gradient(160deg, var(--bg0), var(--bg1));
+    }
+    main {
+      max-width: 820px;
+      margin: 0 auto;
+      padding: 4.5rem 1.25rem 3rem;
+    }
+    .brand {
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 1.65rem;
+      letter-spacing: -0.03em;
+      margin: 0 0 0.35rem;
+    }
+    .lede {
+      color: var(--muted);
+      margin: 0 0 2rem;
+      max-width: 36rem;
+      line-height: 1.5;
+    }
+    form {
+      display: grid;
+      gap: 0.85rem;
+    }
+    label { font-size: 0.9rem; color: var(--muted); }
+    input[type="url"] {
+      width: 100%;
+      padding: 0.9rem 1rem;
+      border-radius: 10px;
+      border: 1px solid var(--line);
+      background: rgba(0,0,0,0.25);
+      color: var(--ink);
+      font-size: 1rem;
+      font-family: "IBM Plex Mono", monospace;
+    }
+    .row {
+      display: flex;
+      gap: 0.75rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .attest {
+      display: flex;
+      gap: 0.55rem;
+      align-items: flex-start;
+      color: var(--muted);
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+    button {
+      border: 0;
+      border-radius: 10px;
+      padding: 0.85rem 1.25rem;
+      background: var(--accent);
+      color: #062214;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .status {
+      margin-top: 1.5rem;
+      padding: 1rem 1.1rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.22);
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.85rem;
+      white-space: pre-wrap;
+      min-height: 3rem;
+    }
+    .report {
+      margin-top: 1rem;
+      padding: 1.1rem 1.2rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(0,0,0,0.28);
+      overflow: auto;
+      max-height: 55vh;
+      font-family: "IBM Plex Mono", monospace;
+      font-size: 0.82rem;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+    a.dl { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 class="brand">vuln-agent</h1>
+    <p class="lede">Paste a URL you own or are authorized to test. Specialist agents run one-shot checks and return a company-ready brief.</p>
+    <form id="scan-form">
+      <label for="url">Target URL</label>
+      <input id="url" type="url" required placeholder="https://example.com" value="" />
+      <label class="attest">
+        <input id="attest" type="checkbox" required />
+        <span>I own this site or have written authorization to test it.</span>
+      </label>
+      <div class="row">
+        <button id="go" type="submit">Scan</button>
+        <a class="dl" id="download" hidden href="#">Download report.md</a>
+      </div>
+    </form>
+    <div class="status" id="status">Ready.</div>
+    <div class="report" id="report" hidden></div>
+  </main>
+  <script>
+    const form = document.getElementById("scan-form");
+    const statusEl = document.getElementById("status");
+    const reportEl = document.getElementById("report");
+    const download = document.getElementById("download");
+    const go = document.getElementById("go");
+
+    async function poll(id) {
+      for (let i = 0; i < 120; i++) {
+        const r = await fetch(`/v1/scans/${id}`);
+        const data = await r.json();
+        statusEl.textContent = `status: ${data.status}\nfindings: ${(data.findings || []).length}\nfingerprint: ${JSON.stringify(data.fingerprint || {})}`;
+        if (data.status === "done" || data.status === "failed") return data;
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+      throw new Error("timeout waiting for scan");
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      go.disabled = true;
+      reportEl.hidden = true;
+      download.hidden = true;
+      statusEl.textContent = "starting…";
+      try {
+        const body = {
+          url: document.getElementById("url").value,
+          attested: document.getElementById("attest").checked,
+        };
+        const res = await fetch("/v1/scans", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        const created = await res.json();
+        if (!res.ok) throw new Error(created.detail || res.statusText);
+        const final = await poll(created.id);
+        if (final.status === "failed") throw new Error(final.error || "scan failed");
+        const md = await fetch(`/v1/scans/${created.id}/report.md`);
+        const text = await md.text();
+        reportEl.hidden = false;
+        reportEl.textContent = text;
+        download.hidden = false;
+        download.href = `/v1/scans/${created.id}/report.md`;
+        download.download = `scan-${created.id}.md`;
+      } catch (err) {
+        statusEl.textContent = `error: ${err.message || err}`;
+      } finally {
+        go.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

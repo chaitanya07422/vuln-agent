@@ -1,0 +1,25 @@
+tech_tags: [nestjs, express]
+leaks:
+  - path: /api
+    severity: info
+    title: "API root responds"
+    finding_if_status: [200, 401, 403]
+    fix: "Ensure API roots do not leak stack traces."
+  - path: /api/v1
+    severity: info
+    title: "API v1 root responds"
+    finding_if_status: [200, 401, 403]
+  - path: /.env
+    severity: critical
+    title: "Exposed .env on Node/Nest host"
+    finding_if_status: [200]
+    finding_if_body_contains: ["=", "SECRET", "DATABASE"]
+    fix: "Never serve .env; rotate secrets."
+cors_api:
+  - path: /api
+    severity: high
+    title: "API CORS reflects arbitrary Origin"
+    origin: "https://evil.example"
+    finding_if_header_contains:
+      access-control-allow-origin: "https://evil.example"
+    fix: "Allowlist origins for the API."
