@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     mongo_uri: Optional[str] = None
+    redis_url: Optional[str] = None
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     enabled_agents: List[str] = Field(default_factory=lambda: ["recon", "reporter"])
     limits: Limits = Field(default_factory=Limits)
@@ -62,6 +63,7 @@ class Settings(BaseSettings):
             host=base.host,
             port=base.port,
             mongo_uri=base.mongo_uri,
+            redis_url=base.redis_url,
             cors_origins=base.cors_origins,
             llm=llm,
         )

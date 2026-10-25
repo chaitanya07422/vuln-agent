@@ -67,6 +67,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "adapt": llm.provider_name("adapt"),
                 "reporter": llm.provider_name("reporter"),
             },
+            "queue": "arq" if (settings.redis_url and settings.mongo_uri) else "in_process",
         }
 
     return app
