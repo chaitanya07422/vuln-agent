@@ -7,6 +7,8 @@ import httpx
 from vuln_agent.tools.dns import DnsLookupTool, MxLookupTool
 from vuln_agent.tools.ports import PortProbeTool
 from vuln_agent.tools.rate_limit import AsyncRateLimiter
+from vuln_agent.tools.safety import url_is_safe_target
+from vuln_agent.tools.smtp_banner import SmtpBannerTool
 
 
 class HttpRequestTool:
@@ -20,12 +22,16 @@ class HttpRequestTool:
         follow_redirects: bool = True,
         max_redirects: int = 5,
         rate_limiter: AsyncRateLimiter | None = None,
+        allow_hosts: Optional[list] = None,
+        enforce_ssrf: bool = True,
     ) -> None:
         self.timeout_sec = timeout_sec
         self.user_agent = user_agent
         self.follow_redirects = follow_redirects
         self.max_redirects = max_redirects
         self.rate_limiter = rate_limiter
+        self.allow_hosts = allow_hosts
+        self.enforce_ssrf = enforce_ssrf
 
     async def __call__(
         self,
@@ -36,6 +42,15 @@ class HttpRequestTool:
         body: Optional[str] = None,
         max_body_bytes: int = 200_000,
     ) -> dict:
+        if self.enforce_ssrf and not url_is_safe_target(url, self.allow_hosts):
+            return {
+                "ok": False,
+                "error": "SSRFBlocked",
+                "detail": "target host blocked (private/local/out-of-scope)",
+                "url": url,
+                "method": method.upper(),
+            }
+
         if self.rate_limiter:
             await self.rate_limiter.acquire()
 
@@ -88,11 +103,13 @@ class ToolBus:
         dns: DnsLookupTool | None = None,
         mx: MxLookupTool | None = None,
         ports: PortProbeTool | None = None,
+        smtp: SmtpBannerTool | None = None,
     ) -> None:
         self.http_request = http
         self.dns_lookup = dns or DnsLookupTool()
         self.mx_lookup = mx or MxLookupTool()
         self.port_probe = ports or PortProbeTool()
+        self.smtp_banner = smtp or SmtpBannerTool()
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -100,4 +117,5 @@ class ToolBus:
             "dns_lookup": self.dns_lookup,
             "mx_lookup": self.mx_lookup,
             "port_probe": self.port_probe,
+            "smtp_banner": self.smtp_banner,
         }
