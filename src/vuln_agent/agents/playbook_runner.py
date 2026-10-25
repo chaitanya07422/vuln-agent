@@ -3,15 +3,23 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from urllib.parse import urljoin, urlparse
 
+from vuln_agent.agents.content_guards import (
+    looks_like_dotenv,
+    looks_like_git_head,
+    looks_like_html_document,
+    looks_like_binary_or_archive,
+    reject_spa_shell_for_leak,
+)
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
 
 
-def _body_match(body: str, needles: Optional[List[str]]) -> bool:
+def _body_match(body: str, needles: Optional[List[str]], *, mode: str = "any") -> bool:
     if not needles:
         return True
     lower = (body or "").lower()
-    return any(n.lower() in lower for n in needles)
+    hits = [n.lower() in lower for n in needles]
+    return all(hits) if mode == "all" else any(hits)
 
 
 def _header_match(headers: Dict[str, str], rules: Optional[Dict[str, str]]) -> bool:
@@ -41,6 +49,22 @@ def in_scope(url: str, allow_hosts: List[str]) -> bool:
         if host == a or host.endswith("." + a):
             return True
     return False
+
+
+def _path_specific_ok(path: str, body: str, headers: Dict[str, str]) -> bool:
+    path_l = (path or "").lower()
+    if path_l.endswith(".env") or "/.env" in path_l:
+        return looks_like_dotenv(body)
+    if ".git/head" in path_l:
+        return looks_like_git_head(body)
+    if path_l.endswith(".zip") or path_l.endswith(".tar.gz") or path_l.endswith(".bak"):
+        return looks_like_binary_or_archive(headers, body)
+    if "actuator" in path_l:
+        # Spring actuator is JSON, not HTML
+        return not looks_like_html_document(body, headers) and (
+            "{" in (body or "")[:200] or "status" in (body or "").lower()
+        )
+    return True
 
 
 async def run_http_steps(
@@ -82,7 +106,14 @@ async def run_http_steps(
         body = resp.get("body") or ""
         headers_out = resp.get("headers") or {}
 
-        if not _body_match(body, step.get("finding_if_body_contains")):
+        # SPA catch-all: 200 + homepage HTML is not a real exposure
+        if step.get("reject_html", True) and reject_spa_shell_for_leak(body, headers_out, path):
+            continue
+        if not _path_specific_ok(path, body, headers_out):
+            continue
+
+        match_mode = step.get("finding_if_body_mode") or "any"
+        if not _body_match(body, step.get("finding_if_body_contains"), mode=match_mode):
             continue
         if not _header_match(headers_out, step.get("finding_if_header_contains")):
             continue
@@ -90,6 +121,14 @@ async def run_http_steps(
             headers_out, step.get("finding_if_header_exists")
         ):
             continue
+
+        # Upload/API paths that only return HTML shell → skip even if status matched
+        if agent_name in ("upload", "cors_api") and looks_like_html_document(body, headers_out):
+            # CORS header findings can still be valid on HTML pages
+            if agent_name == "upload":
+                continue
+            if agent_name == "cors_api" and not step.get("finding_if_header_contains"):
+                continue
 
         snippet = body[:400].replace("\n", " ")
         await ctx.emit_finding(
