@@ -28,6 +28,7 @@ class ScanSummary(BaseModel):
     fingerprint: Dict[str, Any] = Field(default_factory=dict)
     findings: list = Field(default_factory=list)
     risk_path: Optional[str] = None
+    summary: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
 
 

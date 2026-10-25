@@ -182,9 +182,18 @@ class JsAuditAgent(BaseAgent):
                 )
             )
 
-        # LLM pass over excerpts (optional)
-        if ctx.llm and ctx.llm.provider_name("adapt") != "null":
-            # Prefer snippets around risky keywords to stay in token budget
+        # LLM pass only when deterministic signals already hint upload/resume risk
+        # (avoids inventing issues from generic CMS "accept:" snippets)
+        risky_apis = any(
+            any(x in p.lower() for x in ("upload", "presign", "resume", "object"))
+            for p in api_paths
+        )
+        if (
+            matched_ids
+            and risky_apis
+            and ctx.llm
+            and ctx.llm.provider_name("adapt") != "null"
+        ):
             excerpts = []
             for kw in ("request-url", "resumePath", "contentType", "objects/uploads", "accept:"):
                 idx = sample.lower().find(kw.lower())

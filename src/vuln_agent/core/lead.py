@@ -108,6 +108,7 @@ class LeadRunner:
             "error": None,
             "report_md": None,
             "risk_path": None,
+            "summary": None,
         }
         await self.store.create(record)
         await self._enqueue(scan_id, url, scope)
@@ -201,6 +202,7 @@ class LeadRunner:
                 audit=ctx.audit,
                 report_md=md,
                 risk_path=ctx.risk_path,
+                summary=ctx.summary,
             )
         except Exception as exc:  # noqa: BLE001
             await self.store.update(

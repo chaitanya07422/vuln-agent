@@ -37,9 +37,3 @@ leaks:
     finding_if_status: [200]
     finding_if_body_contains: ["DB_PASSWORD", "DB_NAME"]
     fix: "Delete editor backup files; rotate credentials."
-  - path: /license.txt
-    severity: info
-    title: "WordPress license.txt present"
-    finding_if_status: [200]
-    finding_if_body_contains: ["WordPress"]
-    fix: "Optional: remove version-hinting static files."
