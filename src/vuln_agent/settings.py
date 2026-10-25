@@ -21,7 +21,12 @@ class HttpConfig(BaseModel):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="VULN_AGENT_", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="VULN_AGENT_",
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     config: str = "config/default.yaml"
     host: str = "0.0.0.0"
