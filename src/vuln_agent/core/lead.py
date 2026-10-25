@@ -105,10 +105,28 @@ class LeadRunner:
             "report_md": None,
         }
         await self.store.create(record)
-        asyncio.create_task(self._run(scan_id, url, scope))
+        await self._enqueue(scan_id, url, scope)
         return record
 
-    async def _run(self, scan_id: str, url: str, scope: Scope) -> None:
+    async def _enqueue(self, scan_id: str, url: str, scope: Scope) -> None:
+        redis_url = getattr(self.settings, "redis_url", None)
+        mongo_uri = getattr(self.settings, "mongo_uri", None)
+        # Cross-process workers need a shared store (Mongo). Otherwise run in-process.
+        if redis_url and mongo_uri:
+            try:
+                from arq import create_pool
+                from arq.connections import RedisSettings
+
+                redis = await create_pool(RedisSettings.from_dsn(redis_url))
+                await redis.enqueue_job("run_scan_job", scan_id, url, scope.host, scope.scheme)
+                await redis.close()
+                return
+            except Exception:
+                # Fall through to in-process if enqueue fails
+                pass
+        asyncio.create_task(self.run_scan(scan_id, url, scope))
+
+    async def run_scan(self, scan_id: str, url: str, scope: Scope) -> None:
         await self.store.update(scan_id, status="running")
         tools = self._tools()
         ctx = ScanContext(

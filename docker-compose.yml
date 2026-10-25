@@ -5,13 +5,29 @@ services:
       - "8000:8000"
     environment:
       VULN_AGENT_MONGO_URI: mongodb://mongo:27017
+      VULN_AGENT_REDIS_URL: redis://redis:6379
       VULN_AGENT_CONFIG: /app/config/default.yaml
     volumes:
       - ./config:/app/config:ro
       - ./playbooks:/app/playbooks:ro
     depends_on:
       - mongo
+      - redis
     command: uvicorn vuln_agent.main:app --host 0.0.0.0 --port 8000
+
+  worker:
+    build: .
+    environment:
+      VULN_AGENT_MONGO_URI: mongodb://mongo:27017
+      VULN_AGENT_REDIS_URL: redis://redis:6379
+      VULN_AGENT_CONFIG: /app/config/default.yaml
+    volumes:
+      - ./config:/app/config:ro
+      - ./playbooks:/app/playbooks:ro
+    depends_on:
+      - mongo
+      - redis
+    command: arq vuln_agent.worker.job_scan.WorkerSettings
 
   mongo:
     image: mongo:7

@@ -17,6 +17,7 @@ dependencies = [
   "PyYAML>=6.0.1",
   "python-multipart>=0.0.9",
   "motor>=3.5.0",
+  "arq>=0.26.0",
 ]
 
 [tool.setuptools.package-data]
