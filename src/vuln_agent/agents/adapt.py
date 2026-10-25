@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import ipaddress
 import re
 from typing import List
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 from vuln_agent.agents.base import BaseAgent
-from vuln_agent.agents.playbook_runner import in_scope
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
+from vuln_agent.tools.safety import url_is_safe_target
 
 CANDIDATE_PATHS: List[str] = [
     "/.env",
@@ -20,17 +19,6 @@ CANDIDATE_PATHS: List[str] = [
     "/graphiql",
     "/api/graphql",
 ]
-
-
-def _is_public_host(host: str) -> bool:
-    try:
-        ip = ipaddress.ip_address(host)
-        return ip.is_global
-    except ValueError:
-        h = host.lower()
-        if h in {"localhost", "127.0.0.1", "0.0.0.0"} or h.endswith(".local"):
-            return False
-        return True
 
 
 def parse_paths_from_llm(text: str, limit: int = 8) -> List[str]:
@@ -100,8 +88,7 @@ class AdaptAgent(BaseAgent):
             if tried >= limit:
                 break
             target = urljoin(base, path.lstrip("/"))
-            host = urlparse(target).hostname or ""
-            if not _is_public_host(host) or not in_scope(target, ctx.scope.allow_hosts):
+            if not url_is_safe_target(target, ctx.scope.allow_hosts):
                 continue
             tried += 1
             resp = await ctx.tools.http_request(method="GET", url=target)

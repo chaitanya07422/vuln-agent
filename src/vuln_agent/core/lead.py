@@ -75,7 +75,7 @@ class LeadRunner:
         self.playbooks = playbooks or default_playbook_store(settings.config)
         self.llm = llm or LLMRouter()
 
-    def _tools(self) -> ToolBus:
+    def _tools(self, allow_hosts: list | None = None) -> ToolBus:
         limiter = AsyncRateLimiter(self.settings.limits.max_rps)
         http = HttpRequestTool(
             timeout_sec=self.settings.limits.request_timeout_sec,
@@ -83,6 +83,8 @@ class LeadRunner:
             follow_redirects=self.settings.http.follow_redirects,
             max_redirects=self.settings.http.max_redirects,
             rate_limiter=limiter,
+            allow_hosts=allow_hosts,
+            enforce_ssrf=True,
         )
         return ToolBus(http)
 
@@ -128,7 +130,7 @@ class LeadRunner:
 
     async def run_scan(self, scan_id: str, url: str, scope: Scope) -> None:
         await self.store.update(scan_id, status="running")
-        tools = self._tools()
+        tools = self._tools(allow_hosts=list(scope.allow_hosts))
         ctx = ScanContext(
             scan_id=scan_id,
             url=url,
