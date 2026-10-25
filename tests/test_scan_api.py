@@ -17,7 +17,7 @@ def app(tmp_path):
         "  - cors_api\n"
         "  - adapt\n"
         "  - reporter\n"
-        "limits:\n  request_timeout_sec: 20\n  scan_timeout_sec: 120\n"
+        "limits:\n  max_rps: 20\n  request_timeout_sec: 20\n  scan_timeout_sec: 120\n"
         "http:\n  user_agent: vuln-agent-test\n  follow_redirects: true\n  max_redirects: 5\n"
     )
     settings = Settings.load(str(cfg))
