@@ -72,10 +72,15 @@ class ReporterAgent(BaseAgent):
                 "reporter",
                 (
                     "Polish this authorized security brief for a company audience. "
-                    "Keep all findings, severities, evidence URLs, and fixes. "
+                    "Keep ALL findings, severities, evidence URLs, and fixes exactly — "
+                    "do not drop js_audit/upload chain findings. "
+                    "Call out chained risks (upload → public object HTML → resumePath) in the executive summary if present. "
                     "Return markdown only.\n\n" + brief
                 ),
-                system="You are a concise application-security writer. Do not invent findings.",
+                system=(
+                    "You are a concise application-security writer. "
+                    "Never invent findings. Prefer clear remediation over hype."
+                ),
             )
             if polished and polished.strip().startswith("#"):
                 brief = polished.strip()

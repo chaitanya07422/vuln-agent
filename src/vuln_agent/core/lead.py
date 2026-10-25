@@ -144,7 +144,10 @@ class LeadRunner:
             agents = load_agents(self.settings.enabled_agents)
             recon = [a for a in agents if a.name == "recon"]
             reporter = [a for a in agents if a.name == "reporter"]
-            mid = [a for a in agents if a.name not in ("recon", "reporter")]
+            # js_audit first (fills fingerprint.js_api_paths); adapt last (uses them)
+            js_audit = [a for a in agents if a.name == "js_audit"]
+            adapt = [a for a in agents if a.name == "adapt"]
+            mid = [a for a in agents if a.name not in ("recon", "reporter", "js_audit", "adapt")]
 
             for agent in recon:
                 await agent.run(ctx)
@@ -158,11 +161,18 @@ class LeadRunner:
                     return
                 await agent.run(ctx)
 
+            for agent in js_audit:
+                await _maybe_run(agent)
+            tags = set((ctx.fingerprint or {}).get("tags") or [])
+
             if mid:
                 await asyncio.wait_for(
                     asyncio.gather(*[_maybe_run(a) for a in mid]),
                     timeout=self.settings.limits.scan_timeout_sec,
                 )
+
+            for agent in adapt:
+                await _maybe_run(agent)
 
             for agent in reporter:
                 await agent.run(ctx)

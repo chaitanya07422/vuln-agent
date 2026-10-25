@@ -5,6 +5,7 @@ enabled_agents:
   - leaks
   - cors_api
   - upload
+  - js_audit
   - uat_app
   - ports_mail
   - adapt
