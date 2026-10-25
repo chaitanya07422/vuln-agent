@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -24,6 +25,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.store = store
     app.state.lead = lead
     app.state.playbooks = playbooks
+
+    origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
+    if not origins:
+        origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://127.0.0.1:3001",
+        ]
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
     app.include_router(scans_router)
 
     web_dir = Path(__file__).resolve().parent / "web"
