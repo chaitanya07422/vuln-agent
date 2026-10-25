@@ -145,6 +145,8 @@ class AdaptAgent(BaseAgent):
         base = ctx.url if ctx.url.endswith("/") else ctx.url + "/"
         paths = await self._candidate_paths(ctx, limit)
         tried = 0
+        protected: List[tuple] = []
+        public: List[tuple] = []
         for path in paths:
             if tried >= limit:
                 break
@@ -176,22 +178,53 @@ class AdaptAgent(BaseAgent):
             if not _interesting(path, status, resp_body, resp_headers):
                 continue
             if status in (401, 403):
-                sev = "medium"
-                title = f"Protected API responds: {method} {path}"
-            elif path.startswith("/api/") and status == 200:
-                sev = "info"
-                title = f"Public API responds: {method} {path}"
-            else:
-                sev = "high" if any(x in path for x in (".env", ".git", "actuator/env")) else "medium"
-                title = f"Adapt probe hit: {path}"
+                # Skip upload/presign — upload agent already reports those
+                if "upload" in pl or "presign" in pl or "request-url" in pl:
+                    continue
+                protected.append((method, path, status, resp_body[:160], resp.get("url") or target))
+                continue
+            if path.startswith("/api/") and status == 200:
+                public.append((method, path, status, resp_body[:160], resp.get("url") or target))
+                continue
+            sev = "high" if any(x in path for x in (".env", ".git", "actuator/env")) else "medium"
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
                     severity=sev,  # type: ignore[arg-type]
-                    title=title,
+                    title=f"Adapt probe hit: {path}",
                     evidence_url=resp.get("url") or target,
                     evidence_snippet=f"HTTP {status}; {resp_body[:200]}",
                     fix="Review exposure; require auth where appropriate; lock down debug/upload routes.",
                     tags=["adapt", "probe"],
+                )
+            )
+
+        if protected:
+            paths_s = ", ".join(f"{m} {p}" for m, p, *_ in protected[:10])
+            await ctx.emit_finding(
+                Finding(
+                    agent=self.name,
+                    severity="medium",
+                    title=f"Protected APIs respond (auth required): {len(protected)} endpoints",
+                    evidence_url=protected[0][4],
+                    evidence_snippet=f"{paths_s} | e.g. HTTP {protected[0][2]}; {protected[0][3]}",
+                    fix=(
+                        "Expected for private APIs. Confirm each route requires auth, "
+                        "avoids verbose errors, and is not meant to be public."
+                    ),
+                    tags=["adapt", "probe", "auth"],
+                )
+            )
+        if public:
+            paths_s = ", ".join(f"{m} {p}" for m, p, *_ in public[:10])
+            await ctx.emit_finding(
+                Finding(
+                    agent=self.name,
+                    severity="info",
+                    title=f"Public APIs respond: {len(public)} endpoints",
+                    evidence_url=public[0][4],
+                    evidence_snippet=paths_s,
+                    fix="Review whether each public API should stay unauthenticated.",
+                    tags=["adapt", "probe", "public"],
                 )
             )
