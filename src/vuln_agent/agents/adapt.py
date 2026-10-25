@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from typing import List
 from urllib.parse import urljoin, urlparse
 
@@ -9,7 +10,6 @@ from vuln_agent.agents.playbook_runner import in_scope
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
 
-# Heuristic one-shot paths when stack is unknown (no LLM required for v1)
 CANDIDATE_PATHS: List[str] = [
     "/.env",
     "/.git/HEAD",
@@ -24,15 +24,35 @@ CANDIDATE_PATHS: List[str] = [
 
 def _is_public_host(host: str) -> bool:
     try:
-        # reject literal IPs that are private
         ip = ipaddress.ip_address(host)
         return ip.is_global
     except ValueError:
-        # hostname — block obvious local names
         h = host.lower()
         if h in {"localhost", "127.0.0.1", "0.0.0.0"} or h.endswith(".local"):
             return False
         return True
+
+
+def parse_paths_from_llm(text: str, limit: int = 8) -> List[str]:
+    paths: List[str] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip().strip("-*`'\" ")
+        if not line.startswith("/"):
+            m = re.search(r"(/[\w./?=&%~+-]+)", line)
+            if not m:
+                continue
+            line = m.group(1)
+        # single path only, no scheme/host
+        if "://" in line or line.startswith("//"):
+            continue
+        path = line.split()[0]
+        if not path.startswith("/"):
+            continue
+        if path not in paths:
+            paths.append(path)
+        if len(paths) >= limit:
+            break
+    return paths
 
 
 class AdaptAgent(BaseAgent):
@@ -40,16 +60,43 @@ class AdaptAgent(BaseAgent):
     requires_tags: list = []
     skip_if_tags: list = ["unreachable"]
 
+    async def _candidate_paths(self, ctx: ScanContext, limit: int) -> List[str]:
+        paths = list(CANDIDATE_PATHS)
+        if ctx.llm and ctx.llm.provider_name("adapt") != "null":
+            prompt = (
+                f"Target URL: {ctx.url}\n"
+                f"Fingerprint: {ctx.fingerprint}\n"
+                "Suggest up to 8 one-shot GET paths to check for common misconfigurations "
+                "(leaks, debug, admin, graphql, actuator). Reply with one path per line only, "
+                "starting with /. No explanations."
+            )
+            try:
+                text = await ctx.llm.complete(
+                    "adapt",
+                    prompt,
+                    system="You propose safe detect-only web paths. Never suggest password sprays.",
+                )
+                llm_paths = parse_paths_from_llm(text, limit=limit)
+                # Prefer LLM paths first, then fill from heuristics
+                merged: List[str] = []
+                for p in llm_paths + paths:
+                    if p not in merged:
+                        merged.append(p)
+                paths = merged
+            except Exception:
+                pass
+        return paths[:limit]
+
     async def run(self, ctx: ScanContext) -> None:
         tags = set((ctx.fingerprint or {}).get("tags") or [])
-        # Run when unknown OR always with a small budget of extra paths
         if "unknown" not in tags and "wordpress" in tags:
             return
 
         limit = 8
         base = ctx.url if ctx.url.endswith("/") else ctx.url + "/"
+        paths = await self._candidate_paths(ctx, limit)
         tried = 0
-        for path in CANDIDATE_PATHS:
+        for path in paths:
             if tried >= limit:
                 break
             target = urljoin(base, path.lstrip("/"))
@@ -76,7 +123,7 @@ class AdaptAgent(BaseAgent):
                 interesting = True
             if not interesting:
                 continue
-            sev = "high" if path in ("/.env", "/.git/HEAD", "/actuator/env") else "medium"
+            sev = "high" if any(x in path for x in (".env", ".git", "actuator/env")) else "medium"
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
