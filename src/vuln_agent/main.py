@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from vuln_agent.api.routes_scans import router as scans_router
 from vuln_agent.core.lead import LeadRunner
+from vuln_agent.llm.factory import build_llm_router
 from vuln_agent.playbook_loader import default_playbook_store
 from vuln_agent.settings import Settings
 from vuln_agent.store.mongo import build_store
@@ -18,13 +19,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.load()
     store = build_store(settings.mongo_uri)
     playbooks = default_playbook_store(settings.config)
-    lead = LeadRunner(settings, store, playbooks=playbooks)
+    llm = build_llm_router(settings.llm)
+    lead = LeadRunner(settings, store, playbooks=playbooks, llm=llm)
 
     app = FastAPI(title="vuln-agent", version="0.1.0")
     app.state.settings = settings
     app.state.store = store
     app.state.lead = lead
     app.state.playbooks = playbooks
+    app.state.llm = llm
 
     origins = [o.strip() for o in (settings.cors_origins or "").split(",") if o.strip()]
     if not origins:
@@ -59,6 +62,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "enabled_agents": settings.enabled_agents,
             "playbooks": sorted(playbooks._cache.keys()),
             "store": type(store).__name__,
+            "llm": {
+                "lead": llm.provider_name("lead"),
+                "adapt": llm.provider_name("adapt"),
+                "reporter": llm.provider_name("reporter"),
+            },
         }
 
     return app

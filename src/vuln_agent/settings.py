@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -31,6 +31,14 @@ class Settings(BaseSettings):
     enabled_agents: List[str] = Field(default_factory=lambda: ["recon", "reporter"])
     limits: Limits = Field(default_factory=Limits)
     http: HttpConfig = Field(default_factory=HttpConfig)
+    llm: Dict[str, Any] = Field(
+        default_factory=lambda: {
+            "lead": "claude",
+            "adapt": "gemini-flash",
+            "reporter": "claude",
+            "fallback": "openai",
+        }
+    )
 
     @classmethod
     def load(cls, config_path: str | None = None) -> "Settings":
@@ -39,11 +47,13 @@ class Settings(BaseSettings):
         if not path.is_file():
             alt = Path.cwd() / path
             path = alt if alt.is_file() else path
-        data = {}
+        data: Dict[str, Any] = {}
         if path.is_file():
             data = yaml.safe_load(path.read_text()) or {}
         limits = Limits(**(data.get("limits") or {}))
         http = HttpConfig(**(data.get("http") or {}))
+        llm = dict(base.llm)
+        llm.update(data.get("llm") or {})
         return cls(
             config=str(path),
             enabled_agents=list(data.get("enabled_agents") or ["recon", "reporter"]),
@@ -53,4 +63,5 @@ class Settings(BaseSettings):
             port=base.port,
             mongo_uri=base.mongo_uri,
             cors_origins=base.cors_origins,
+            llm=llm,
         )

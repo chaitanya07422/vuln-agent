@@ -17,10 +17,22 @@ class LLMRouter:
             "fallback": null,
         }
 
+    def provider_name(self, role: Role) -> str:
+        p = self.mapping.get(role) or self.mapping.get("fallback") or NullLLM()
+        return getattr(p, "name", "null")
+
     async def complete(self, role: Role, prompt: str, *, system: Optional[str] = None) -> str:
         provider = self.mapping.get(role) or self.mapping.get("fallback") or NullLLM()
         try:
-            return await provider.complete(prompt, system=system)
+            text = await provider.complete(prompt, system=system)
+            if text:
+                return text
         except Exception:
-            fallback = self.mapping.get("fallback") or NullLLM()
+            pass
+        fallback = self.mapping.get("fallback") or NullLLM()
+        if fallback is provider:
+            return ""
+        try:
             return await fallback.complete(prompt, system=system)
+        except Exception:
+            return ""

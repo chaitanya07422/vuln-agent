@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any, Dict, List
+from typing import List
 
 from vuln_agent.agents.base import BaseAgent
 from vuln_agent.core.context import ScanContext
@@ -67,6 +67,22 @@ class ReporterAgent(BaseAgent):
 
     async def run(self, ctx: ScanContext) -> None:
         brief = build_company_brief(ctx)
+        if ctx.llm and ctx.llm.provider_name("reporter") != "null":
+            polished = await ctx.llm.complete(
+                "reporter",
+                (
+                    "Polish this authorized security brief for a company audience. "
+                    "Keep all findings, severities, evidence URLs, and fixes. "
+                    "Return markdown only.\n\n" + brief
+                ),
+                system="You are a concise application-security writer. Do not invent findings.",
+            )
+            if polished and polished.strip().startswith("#"):
+                brief = polished.strip()
+            elif polished and len(polished.strip()) > 80:
+                # LLM returned prose without heading — keep structured brief, append note
+                brief = brief + "\n## Analyst notes\n\n" + polished.strip() + "\n"
+
         ctx.report_md = brief
         await ctx.emit_finding(
             Finding(
@@ -74,7 +90,9 @@ class ReporterAgent(BaseAgent):
                 severity="info",
                 title="Report generated",
                 evidence_url=ctx.url,
-                evidence_snippet=f"{len(ctx.findings)} findings packaged into company brief",
+                evidence_snippet=(
+                    f"{len(ctx.findings)} findings; llm={ctx.llm.provider_name('reporter') if ctx.llm else 'null'}"
+                ),
                 tags=["report"],
             )
         )

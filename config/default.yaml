@@ -20,8 +20,9 @@ http:
   follow_redirects: true
   max_redirects: 5
 
+# Providers activate only when API keys are present; otherwise NullLLM.
 llm:
-  lead: null
-  adapt: null
-  reporter: null
-  fallback: null
+  lead: claude
+  adapt: gemini-flash
+  reporter: claude
+  fallback: openai
