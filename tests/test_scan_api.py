@@ -63,16 +63,21 @@ async def test_scan_example_com_e2e(app):
 
         assert final is not None
         assert final["status"] == "done", final
-        assert final["findings"], "expected findings"
-        assert any(f["agent"] == "recon" for f in final["findings"])
-        assert any(f["agent"] == "reporter" for f in final["findings"])
         assert "tags" in final["fingerprint"]
+        summary = final.get("summary") or {}
+        assert summary.get("verdict") in ("looks_solid", "minor_notes", "issues_found")
+        assert summary.get("headline")
+        assert summary.get("agents")
+        # No noisy info cards (recon complete / open ports / report generated)
+        for f in final.get("findings") or []:
+            assert f["severity"] != "info"
+            assert f["agent"] != "reporter"
 
         report = await client.get(f"/v1/scans/{scan_id}/report.md")
         assert report.status_code == 200
         low = report.text.lower()
         assert "example.com" in low
-        assert "security" in low or "scan report" in low or "finding" in low
+        assert "security" in low or "each agent" in low or "solid" in low or "finding" in low
 
         audit = await client.get(f"/v1/scans/{scan_id}/audit.json")
         assert audit.status_code == 200

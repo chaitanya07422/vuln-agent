@@ -6,6 +6,7 @@ from vuln_agent.core.finding import Finding
 from vuln_agent.tools.safety import is_blocked_hostname, resolve_public_ips
 
 RISKY = {21, 22, 23, 25, 445, 3306, 5432, 6379, 27017}
+# 80/443 alone are normal for websites — never emit as a finding card
 
 
 class PortsMailAgent(BaseAgent):
@@ -15,47 +16,39 @@ class PortsMailAgent(BaseAgent):
 
     async def run(self, ctx: ScanContext) -> None:
         host = ctx.scope.host
+        ctx.fingerprint = dict(ctx.fingerprint or {})
+
         if is_blocked_hostname(host) or not resolve_public_ips(host):
-            await ctx.emit_finding(
-                Finding(
-                    agent=self.name,
-                    severity="info",
-                    title="Port/mail checks skipped — host not publicly resolvable",
-                    evidence_url=ctx.url,
-                    evidence_snippet=host,
-                    tags=["dns", "skipped"],
-                )
-            )
+            ctx.fingerprint["ports_mail"] = {"skipped": True, "reason": "not publicly resolvable"}
             return
 
         dns = await ctx.tools.dns_lookup(host=host)
         await ctx.audit_event(agent=self.name, tool="dns_lookup", result=dns)
-        if dns.get("ok") and dns.get("addresses"):
-            await ctx.emit_finding(
-                Finding(
-                    agent=self.name,
-                    severity="info",
-                    title=f"DNS resolves {host}",
-                    evidence_url=ctx.url,
-                    evidence_snippet=", ".join(dns["addresses"][:8]),
-                    tags=["dns"],
-                )
-            )
+        addresses = dns.get("addresses") or [] if dns.get("ok") else []
 
         ports = await ctx.tools.port_probe(host=host)
         await ctx.audit_event(agent=self.name, tool="port_probe", result={"open": ports.get("open_ports")})
         open_ports = ports.get("open_ports") or []
-        if open_ports:
-            await ctx.emit_finding(
-                Finding(
-                    agent=self.name,
-                    severity="info",
-                    title=f"Open ports: {open_ports}",
-                    evidence_url=ctx.url,
-                    evidence_snippet=str(open_ports),
-                    tags=["ports"],
-                )
-            )
+
+        mx = await ctx.tools.mx_lookup(host=host)
+        await ctx.audit_event(agent=self.name, tool="mx_lookup", result=mx)
+        mail_hosts = []
+        for mail_host in (mx.get("mail_hosts") or [])[:5]:
+            if is_blocked_hostname(mail_host) or not resolve_public_ips(mail_host):
+                continue
+            # Skip noise: MX pointing at the same web host
+            if mail_host.lower().rstrip(".") in {host.lower(), f"www.{host.lower()}"}:
+                continue
+            if host.lower().startswith("www.") and mail_host.lower().rstrip(".") == host.lower()[4:]:
+                continue
+            mail_hosts.append(mail_host)
+
+        ctx.fingerprint["ports_mail"] = {
+            "dns": addresses[:8],
+            "open_ports": open_ports,
+            "mail_hosts": mail_hosts[:3],
+        }
+
         for p in open_ports:
             if p in RISKY:
                 await ctx.emit_finding(
@@ -86,16 +79,13 @@ class PortsMailAgent(BaseAgent):
                     )
                 )
 
-        mx = await ctx.tools.mx_lookup(host=host)
-        await ctx.audit_event(agent=self.name, tool="mx_lookup", result=mx)
-        for mail_host in (mx.get("mail_hosts") or [])[:2]:
-            if is_blocked_hostname(mail_host) or not resolve_public_ips(mail_host):
-                continue
+        # Distinct mail hosts only (not www == site)
+        for mail_host in mail_hosts[:2]:
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
                     severity="info",
-                    title=f"Mail-related host resolves: {mail_host}",
+                    title=f"Separate mail host resolves: {mail_host}",
                     evidence_url=ctx.url,
                     evidence_snippet=mail_host,
                     tags=["mail"],
