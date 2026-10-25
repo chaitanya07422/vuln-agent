@@ -1,0 +1,12 @@
+enabled_agents:
+  - recon
+
+limits:
+  max_rps: 5
+  request_timeout_sec: 15
+  scan_timeout_sec: 120
+
+http:
+  user_agent: "vuln-agent/0.1 (+authorized-scan)"
+  follow_redirects: true
+  max_redirects: 5
