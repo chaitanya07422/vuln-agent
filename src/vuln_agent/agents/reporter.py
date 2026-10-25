@@ -4,6 +4,8 @@ from collections import Counter
 from typing import List
 
 from vuln_agent.agents.base import BaseAgent
+from vuln_agent.agents.explain import enrich_findings_explanations
+from vuln_agent.agents.risk_path import build_risk_path
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
 
@@ -25,9 +27,24 @@ def build_company_brief(ctx: ScanContext) -> str:
         "",
         f"**Fingerprint:** `{ctx.fingerprint}`",
         "",
-        "## Priority findings",
-        "",
     ]
+    if ctx.risk_path:
+        lines.extend(
+            [
+                "## How this could be abused (high level)",
+                "",
+                "For client understanding only — not an exploit guide.",
+                "",
+                ctx.risk_path,
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "## Priority findings",
+            "",
+        ]
+    )
     actionable = [f for f in findings if f.severity in ("critical", "high", "medium")]
     actionable.sort(key=lambda f: SEVERITY_ORDER.index(f.severity))
     if not actionable:
@@ -42,6 +59,7 @@ def build_company_brief(ctx: ScanContext) -> str:
                     f"- Agent: `{f.agent}`",
                     f"- Evidence: {f.evidence_url or '—'}",
                     f"- Detail: `{f.evidence_snippet or ''}`",
+                    f"- Why it matters: {f.explanation or 'See evidence and remediation below.'}",
                     f"- Fix: {f.fix or 'Review and harden this surface.'}",
                     "",
                 ]
@@ -66,29 +84,39 @@ class ReporterAgent(BaseAgent):
     skip_if_tags: list = []
 
     async def run(self, ctx: ScanContext) -> None:
+        enriched = await enrich_findings_explanations(ctx)
+        ctx.risk_path = await build_risk_path(ctx)
         brief = build_company_brief(ctx)
-        if ctx.llm and ctx.llm.provider_name("reporter") != "null":
+
+        role = None
+        if ctx.llm:
+            for candidate in ("reporter", "adapt"):
+                if ctx.llm.provider_name(candidate) != "null":
+                    role = candidate
+                    break
+        if role:
             polished = await ctx.llm.complete(
-                "reporter",
+                role,  # type: ignore[arg-type]
                 (
                     "Polish this authorized security brief for a company audience. "
-                    "Keep ALL findings, severities, evidence URLs, and fixes exactly — "
-                    "do not drop js_audit/upload chain findings. "
-                    "Call out chained risks (upload → public object HTML → resumePath) in the executive summary if present. "
+                    "Keep ALL findings, severities, evidence URLs, explanations, fixes, "
+                    "and the high-level abuse path section — do not add exploit detail. "
+                    "Do not drop js_audit/upload chain findings. "
                     "Return markdown only.\n\n" + brief
                 ),
                 system=(
-                    "You are a concise application-security writer. "
-                    "Never invent findings. Prefer clear remediation over hype."
+                    "You are a concise application-security writer for business clients. "
+                    "Never invent findings. Never add payloads or step-by-step exploits. "
+                    "Prefer clear remediation over hype."
                 ),
             )
             if polished and polished.strip().startswith("#"):
                 brief = polished.strip()
             elif polished and len(polished.strip()) > 80:
-                # LLM returned prose without heading — keep structured brief, append note
                 brief = brief + "\n## Analyst notes\n\n" + polished.strip() + "\n"
 
         ctx.report_md = brief
+        llm_name = ctx.llm.provider_name(role) if ctx.llm and role else "null"  # type: ignore[arg-type]
         await ctx.emit_finding(
             Finding(
                 agent=self.name,
@@ -96,7 +124,8 @@ class ReporterAgent(BaseAgent):
                 title="Report generated",
                 evidence_url=ctx.url,
                 evidence_snippet=(
-                    f"{len(ctx.findings)} findings; llm={ctx.llm.provider_name('reporter') if ctx.llm else 'null'}"
+                    f"{len(ctx.findings)} findings; explained={enriched}; "
+                    f"risk_path={'yes' if ctx.risk_path else 'no'}; llm={llm_name}"
                 ),
                 tags=["report"],
             )

@@ -13,5 +13,6 @@ class Finding(BaseModel):
     title: str
     evidence_url: Optional[str] = None
     evidence_snippet: Optional[str] = None
+    explanation: Optional[str] = None
     fix: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
