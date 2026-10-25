@@ -70,8 +70,9 @@ async def test_scan_example_com_e2e(app):
 
         report = await client.get(f"/v1/scans/{scan_id}/report.md")
         assert report.status_code == 200
-        assert "Security brief" in report.text or "Scan report" in report.text
-        assert "example.com" in report.text
+        low = report.text.lower()
+        assert "example.com" in low
+        assert "security" in low or "scan report" in low or "finding" in low
 
         audit = await client.get(f"/v1/scans/{scan_id}/audit.json")
         assert audit.status_code == 200

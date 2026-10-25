@@ -57,6 +57,8 @@ def render_markdown(scan: Dict[str, Any]) -> str:
                     "",
                 ]
             )
+            if f.get("explanation"):
+                lines.extend([f"**Why it matters:** {f['explanation']}", ""])
             if f.get("fix"):
                 lines.extend([f"**Fix:** {f['fix']}", ""])
     return "\n".join(lines)
@@ -105,6 +107,7 @@ class LeadRunner:
             "audit": [],
             "error": None,
             "report_md": None,
+            "risk_path": None,
         }
         await self.store.create(record)
         await self._enqueue(scan_id, url, scope)
@@ -197,6 +200,7 @@ class LeadRunner:
                 findings=findings,
                 audit=ctx.audit,
                 report_md=md,
+                risk_path=ctx.risk_path,
             )
         except Exception as exc:  # noqa: BLE001
             await self.store.update(

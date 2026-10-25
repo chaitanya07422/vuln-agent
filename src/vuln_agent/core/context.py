@@ -34,6 +34,7 @@ class ScanContext:
     playbooks: Any = None
     llm: Any = None
     report_md: Optional[str] = None
+    risk_path: Optional[str] = None
     emit: Optional[Callable[[Finding], Awaitable[None]]] = None
     record_audit: Optional[Callable[..., Awaitable[None]]] = None
 

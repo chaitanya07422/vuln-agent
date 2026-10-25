@@ -22,8 +22,9 @@ http:
   max_redirects: 5
 
 # Providers activate only when API keys are present; otherwise NullLLM.
+# Gemini is used for Adapt probes + finding explanations/report polish when set.
 llm:
   lead: claude
   adapt: gemini-flash
-  reporter: claude
-  fallback: openai
+  reporter: gemini-flash
+  fallback: gemini-flash
