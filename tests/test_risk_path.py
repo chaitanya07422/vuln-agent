@@ -10,6 +10,7 @@ def test_heuristic_upload_resume_chain():
         scope=Scope(host="example.com", scheme="https", allow_hosts=["example.com"]),
         tools=None,
     )
+    ctx.fingerprint = {"tags": ["express"]}
     ctx.findings = [
         Finding(
             agent="upload",
@@ -30,6 +31,38 @@ def test_heuristic_upload_resume_chain():
     assert "Priority fix" in text
     assert "curl" not in text.lower()
     assert "payload" not in text.lower()
+    assert text.count("Defenders should treat") <= 1
+
+
+def test_heuristic_follows_findings_not_stack_guesses():
+    """Any future URL: story must come from findings, not invent upload on CMS sites."""
+    ctx = ScanContext(
+        scan_id="t",
+        url="https://www.doctutorials.com/",
+        scope=Scope(host="www.doctutorials.com", scheme="https", allow_hosts=["www.doctutorials.com"]),
+        tools=None,
+    )
+    ctx.fingerprint = {"tags": ["wordpress"]}
+    ctx.findings = [
+        Finding(
+            agent="users",
+            severity="high",
+            title="Public WordPress user enumeration",
+            tags=["wordpress", "users"],
+        ),
+        Finding(
+            agent="auth",
+            severity="high",
+            title="WordPress XML-RPC enabled",
+            tags=["wordpress", "xmlrpc"],
+        ),
+    ]
+    text = heuristic_risk_path(ctx)
+    assert "upload" not in text.lower()
+    assert "author" in text.lower() or "account" in text.lower()
+    assert "remote" in text.lower() or "login" in text.lower()
+    assert "Priority fix" in text
+    assert text.count("Defenders should treat") == 0
 
 
 def test_clean_strips_fences():
