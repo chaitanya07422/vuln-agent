@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
 import os
-from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
-from uuid import uuid4
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -17,35 +12,83 @@ from vuln_agent.auth.tokens import public_user
 
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
 
-PRO_MONTHLY_INR = 99900  # paise
-PRO_YEARLY_INR = 799900
+PRODUCT_ID = "scanlead"
 
 
 class CheckoutBody(BaseModel):
     interval: str = "month"  # month | year
 
 
-def _razorpay_configured() -> bool:
-    return bool(os.getenv("RAZORPAY_KEY_ID") and os.getenv("RAZORPAY_KEY_SECRET"))
+def _payments_url() -> str:
+    return (os.getenv("PAYMENTS_SERVICE_URL") or "http://127.0.0.1:8100").rstrip("/")
+
+
+def _payments_key() -> str:
+    return os.getenv("PAYMENTS_KEY_SCANLEAD") or ""
+
+
+def _payments_configured() -> bool:
+    return bool(_payments_url())
+
+
+async def _fetch_entitlement(user_id: str) -> Dict[str, Any]:
+    headers = {}
+    key = _payments_key()
+    if key:
+        headers["X-Product-Key"] = key
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        res = await client.get(
+            f"{_payments_url()}/v1/entitlements",
+            params={"product_id": PRODUCT_ID, "user_ref": user_id},
+            headers=headers,
+        )
+        if res.status_code >= 400:
+            return {"plan": "free", "active": False, "expires_at": None}
+        return res.json()
+
+
+async def sync_user_plan(request: Request, user: Dict[str, Any]) -> Dict[str, Any]:
+    """Pull entitlement from payments-service into local user.plan."""
+    try:
+        ent = await _fetch_entitlement(user["id"])
+    except Exception:
+        return user
+    if ent.get("active") and ent.get("plan") == "pro":
+        if user.get("plan") != "pro" or user.get("plan_expires_at") != ent.get("expires_at"):
+            user = await request.app.state.users.update(
+                user["id"],
+                plan="pro",
+                plan_expires_at=ent.get("expires_at"),
+            )
+    elif user.get("plan") == "pro" and not ent.get("active"):
+        user = await request.app.state.users.update(
+            user["id"],
+            plan="free",
+            plan_expires_at=None,
+        )
+    return user
 
 
 @router.get("/plans")
 async def plans() -> Dict[str, Any]:
+    ready = False
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            res = await client.get(f"{_payments_url()}/v1/products/{PRODUCT_ID}/plans")
+            if res.status_code < 400:
+                data = res.json()
+                ready = bool(data.get("polar_ready") or data.get("mock_allowed"))
+    except Exception:
+        ready = False
     return {
         "currency": "INR",
         "plans": [
-            {
-                "id": "free",
-                "name": "Free",
-                "price": 0,
-                "history": 10,
-                "pdf": False,
-            },
+            {"id": "free", "name": "Free", "price": 0, "history": 10, "pdf": False},
             {
                 "id": "pro_monthly",
                 "name": "Pro",
                 "interval": "month",
-                "price": PRO_MONTHLY_INR // 100,
+                "price": 999,
                 "history": 500,
                 "pdf": True,
             },
@@ -53,12 +96,14 @@ async def plans() -> Dict[str, Any]:
                 "id": "pro_yearly",
                 "name": "Pro yearly",
                 "interval": "year",
-                "price": PRO_YEARLY_INR // 100,
+                "price": 7999,
                 "history": 500,
                 "pdf": True,
             },
         ],
-        "razorpay_ready": _razorpay_configured(),
+        "payments_ready": ready,
+        # backward-compatible alias for older UI
+        "razorpay_ready": ready,
     }
 
 
@@ -68,87 +113,64 @@ async def checkout(
     request: Request,
     user: Dict[str, Any] = Depends(require_user),
 ) -> Dict[str, Any]:
-    if not _razorpay_configured():
-        raise HTTPException(status_code=503, detail="Billing not configured yet")
-    amount = PRO_YEARLY_INR if body.interval == "year" else PRO_MONTHLY_INR
-    receipt = f"sl_{user['id'][:8]}_{uuid4().hex[:8]}"
-    auth = (os.environ["RAZORPAY_KEY_ID"], os.environ["RAZORPAY_KEY_SECRET"])
-    async with httpx.AsyncClient(timeout=20.0) as client:
+    if not _payments_configured():
+        raise HTTPException(status_code=503, detail="Payments service URL not configured")
+    plan_id = "pro_yearly" if body.interval == "year" else "pro_monthly"
+    front = os.getenv("VULN_AGENT_FRONTEND_URL", "http://localhost:3000").rstrip("/")
+    headers = {"Content-Type": "application/json"}
+    key = _payments_key()
+    if key:
+        headers["X-Product-Key"] = key
+    async with httpx.AsyncClient(timeout=30.0) as client:
         res = await client.post(
-            "https://api.razorpay.com/v1/orders",
-            auth=auth,
+            f"{_payments_url()}/v1/checkout",
+            headers=headers,
             json={
-                "amount": amount,
-                "currency": "INR",
-                "receipt": receipt,
-                "notes": {
-                    "user_id": user["id"],
-                    "email": user.get("email") or "",
-                    "interval": body.interval,
-                },
+                "product_id": PRODUCT_ID,
+                "user_ref": user["id"],
+                "plan_id": plan_id,
+                "success_url": f"{front}/pricing?paid=1",
+                "cancel_url": f"{front}/pricing?canceled=1",
+                "customer_email": user.get("email"),
             },
         )
         if res.status_code >= 400:
-            raise HTTPException(status_code=502, detail=f"Razorpay error: {res.text[:200]}")
-        order = res.json()
+            raise HTTPException(status_code=502, detail=f"payments-service: {res.text[:240]}")
+        data = res.json()
     return {
-        "order_id": order["id"],
-        "amount": order["amount"],
-        "currency": order["currency"],
-        "key_id": os.environ["RAZORPAY_KEY_ID"],
-        "name": "ScanLead Pro",
-        "description": f"Pro ({body.interval})",
-        "prefill": {"email": user.get("email"), "name": user.get("name")},
-        "notes": {"user_id": user["id"], "interval": body.interval},
+        "checkout_url": data.get("checkout_url"),
+        "provider": data.get("provider"),
+        "mock": data.get("mock", False),
+        "plan_id": plan_id,
+    }
+
+
+@router.post("/sync")
+async def sync_billing(
+    request: Request,
+    user: Dict[str, Any] = Depends(require_user),
+) -> Dict[str, Any]:
+    user = await sync_user_plan(request, user)
+    return {
+        "user": public_user(user),
+        "plan": effective_plan(user),
+        "history_limit": 500 if effective_plan(user) == "pro" else 10,
+        "pdf": effective_plan(user) == "pro",
     }
 
 
 @router.post("/webhook")
-async def webhook(request: Request) -> Dict[str, str]:
-    raw = await request.body()
-    secret = os.getenv("RAZORPAY_WEBHOOK_SECRET") or ""
-    sig = request.headers.get("X-Razorpay-Signature", "")
-    if secret:
-        expected = hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(expected, sig):
-            raise HTTPException(status_code=400, detail="bad signature")
-    try:
-        payload = json.loads(raw.decode() or "{}")
-    except json.JSONDecodeError as exc:
-        raise HTTPException(status_code=400, detail="invalid json") from exc
-
-    event = payload.get("event") or ""
-    if event not in ("payment.captured", "order.paid"):
-        return {"ok": "ignored"}
-
-    entity = (payload.get("payload") or {}).get("payment", {}).get("entity") or {}
-    notes = entity.get("notes") or {}
-    user_id = notes.get("user_id")
-    interval = notes.get("interval") or "month"
-    if not user_id:
-        # try order notes
-        order_ent = (payload.get("payload") or {}).get("order", {}).get("entity") or {}
-        notes = order_ent.get("notes") or notes
-        user_id = notes.get("user_id")
-        interval = notes.get("interval") or interval
-    if not user_id:
-        return {"ok": "no_user"}
-
-    days = 365 if interval == "year" else 30
-    expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
-    try:
-        await request.app.state.users.update(
-            user_id,
-            plan="pro",
-            plan_expires_at=expires,
-        )
-    except KeyError:
-        raise HTTPException(status_code=404, detail="user not found") from None
-    return {"ok": "upgraded"}
+async def webhook_legacy() -> Dict[str, str]:
+    """Razorpay webhook retired — Polar webhooks hit payments-service."""
+    return {"ok": "retired", "hint": "POST /v1/webhooks/polar on payments-service"}
 
 
 @router.get("/me")
-async def billing_me(user: Dict[str, Any] = Depends(require_user)) -> Dict[str, Any]:
+async def billing_me(
+    request: Request,
+    user: Dict[str, Any] = Depends(require_user),
+) -> Dict[str, Any]:
+    user = await sync_user_plan(request, user)
     return {
         "user": public_user(user),
         "plan": effective_plan(user),
