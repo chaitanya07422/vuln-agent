@@ -110,13 +110,22 @@ async def plans() -> Dict[str, Any]:
     return {
         "currency": "INR",
         "plans": [
-            {"id": "free", "name": "Free", "price": 0, "history": 10, "pdf": False},
+            {
+                "id": "free",
+                "name": "Free",
+                "price": 0,
+                "history": 5,
+                "scans": 5,
+                "pdf": False,
+                "note": "5 scans after signup · guest gets 2 first",
+            },
             {
                 "id": "pro_monthly",
                 "name": "Pro",
                 "interval": "month",
                 "price": 999,
                 "history": 500,
+                "scans": 500,
                 "pdf": True,
             },
             {
@@ -125,6 +134,7 @@ async def plans() -> Dict[str, Any]:
                 "interval": "year",
                 "price": 7999,
                 "history": 500,
+                "scans": 500,
                 "pdf": True,
             },
             {
@@ -137,6 +147,7 @@ async def plans() -> Dict[str, Any]:
                 "credits": 1,
             },
         ],
+        "guest_scans": 2,
         "payments_ready": ready,
         # backward-compatible alias for older UI
         "razorpay_ready": ready,
@@ -196,7 +207,7 @@ async def sync_billing(
         "user": public_user(user),
         "plan": effective_plan(user),
         "deep_credits": int(user.get("deep_credits") or 0),
-        "history_limit": 500 if effective_plan(user) == "pro" else 10,
+        "history_limit": 500 if effective_plan(user) == "pro" else 5,
         "pdf": effective_plan(user) == "pro" or int(user.get("deep_credits") or 0) > 0,
     }
 
@@ -217,6 +228,6 @@ async def billing_me(
         "user": public_user(user),
         "plan": effective_plan(user),
         "deep_credits": int(user.get("deep_credits") or 0),
-        "history_limit": 500 if effective_plan(user) == "pro" else 10,
+        "history_limit": 500 if effective_plan(user) == "pro" else 5,
         "pdf": effective_plan(user) == "pro" or int(user.get("deep_credits") or 0) > 0,
     }

@@ -1,19 +1,29 @@
 from __future__ import annotations
 
+import secrets
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 from vuln_agent.api.routes_billing import consume_deep_credit, sync_user_plan
-from vuln_agent.auth.deps import optional_user, require_user
-from vuln_agent.auth.quotas import create_limit, history_limit, is_pro
+from vuln_agent.auth.deps import effective_plan, optional_user, require_user
+from vuln_agent.auth.quotas import (
+    FREE_SCAN_LIMIT,
+    GUEST_LIFETIME_LIMIT,
+    create_limit,
+    history_limit,
+    is_pro,
+    quota_payload,
+)
 from vuln_agent.core.errors import ScanNotFoundError
 from vuln_agent.core.html_report import render_scan_html
 from vuln_agent.core.scan_diff import diff_findings
 
 router = APIRouter(prefix="/v1/scans", tags=["scans"])
+
+GUEST_COOKIE = "scanlead_gid"
 
 
 class ScanCreate(BaseModel):
@@ -63,10 +73,94 @@ def _public_scan(scan: Dict[str, Any], *, include_claim: bool = False) -> Dict[s
     return out
 
 
+def _client_ip(request: Request) -> str:
+    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
+    if forwarded:
+        return forwarded
+    if request.client and request.client.host:
+        return request.client.host
+    return ""
+
+
+def _guest_id(request: Request) -> str:
+    raw = (request.cookies.get(GUEST_COOKIE) or "").strip()
+    if raw and len(raw) <= 64:
+        return raw
+    return secrets.token_urlsafe(18)
+
+
+def _set_guest_cookie(response: Response, guest_id: str, *, secure: bool) -> None:
+    response.set_cookie(
+        key=GUEST_COOKIE,
+        value=guest_id,
+        max_age=60 * 60 * 24 * 400,  # ~13 months
+        httponly=True,
+        samesite="lax",
+        secure=secure,
+        path="/",
+    )
+
+
+def _cookie_secure(request: Request) -> bool:
+    if (request.headers.get("x-forwarded-proto") or "").lower() == "https":
+        return True
+    return request.url.scheme == "https"
+
+
+def _free_exhausted_detail() -> Dict[str, Any]:
+    return {
+        "code": "FREE_QUOTA_EXCEEDED",
+        "message": f"Free plan includes {FREE_SCAN_LIMIT} scans. Upgrade to Pro or buy a ₹60 deep brief.",
+        "upgrade": {"pro": True, "deep": True},
+        "limit": FREE_SCAN_LIMIT,
+    }
+
+
+def _guest_exhausted_detail() -> Dict[str, Any]:
+    return {
+        "code": "GUEST_QUOTA_EXCEEDED",
+        "message": f"You used your {GUEST_LIFETIME_LIMIT} free guest scans. Sign in for {FREE_SCAN_LIMIT} more on Free.",
+        "upgrade": {"signin": True},
+        "limit": GUEST_LIFETIME_LIMIT,
+    }
+
+
+@router.get("/quota")
+async def get_quota(
+    request: Request,
+    response: Response,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> Dict[str, Any]:
+    store = request.app.state.store
+    if user:
+        try:
+            user = await sync_user_plan(request, user)
+        except Exception:
+            pass
+        plan = effective_plan(user)
+        used = await store.count_by_owner(user["id"])
+        limit = create_limit(user)
+        payload = quota_payload(
+            mode=plan,
+            limit=limit,
+            used=used,
+            deep_credits=int(user.get("deep_credits") or 0),
+        )
+        return payload
+
+    guest_id = _guest_id(request)
+    if not request.cookies.get(GUEST_COOKIE):
+        _set_guest_cookie(response, guest_id, secure=_cookie_secure(request))
+    ip = _client_ip(request)
+    used = await request.app.state.guest_quota.effective_used(guest_id, ip or None)
+    return quota_payload(mode="guest", limit=GUEST_LIFETIME_LIMIT, used=used, deep_credits=0)
+
+
 @router.post("", response_model=ScanSummary, status_code=202)
 async def create_scan(
     body: ScanCreate,
     request: Request,
+    response: Response,
     user: Optional[Dict[str, Any]] = Depends(optional_user),
 ) -> Dict[str, Any]:
     lead = request.app.state.lead
@@ -74,16 +168,23 @@ async def create_scan(
     owner_id = user["id"] if user else None
     if user:
         count = await store.count_by_owner(owner_id)
-        if count >= history_limit(user):
-            raise HTTPException(
-                status_code=402,
-                detail=f"Saved scan limit reached ({history_limit(user)}). Upgrade to Pro.",
-            )
-        if count >= create_limit(user):
-            raise HTTPException(
-                status_code=429,
-                detail=f"Create quota reached ({create_limit(user)}). Upgrade to Pro or wait.",
-            )
+        limit = create_limit(user)
+        if count >= limit:
+            if is_pro(user):
+                raise HTTPException(
+                    status_code=429,
+                    detail=f"Create quota reached ({limit}). Contact support or wait.",
+                )
+            raise HTTPException(status_code=402, detail=_free_exhausted_detail())
+    else:
+        guest_id = _guest_id(request)
+        ip = _client_ip(request)
+        used = await request.app.state.guest_quota.effective_used(guest_id, ip or None)
+        if used >= GUEST_LIFETIME_LIMIT:
+            raise HTTPException(status_code=401, detail=_guest_exhausted_detail())
+        await request.app.state.guest_quota.consume(guest_id, ip or None)
+        _set_guest_cookie(response, guest_id, secure=_cookie_secure(request))
+
     try:
         record = await lead.start_scan(
             url=str(body.url),
@@ -149,10 +250,12 @@ async def claim_scan(
         raise HTTPException(status_code=403, detail="invalid claim token")
     count = await store.count_by_owner(user["id"])
     if count >= history_limit(user):
-        raise HTTPException(
-            status_code=402,
-            detail=f"Saved scan limit reached ({history_limit(user)}). Upgrade to Pro.",
-        )
+        if is_pro(user):
+            raise HTTPException(
+                status_code=402,
+                detail=f"Saved scan limit reached ({history_limit(user)}).",
+            )
+        raise HTTPException(status_code=402, detail=_free_exhausted_detail())
     updated = await store.update(scan_id, owner_id=user["id"], claim_token=None)
     return _public_scan(updated)
 
@@ -172,8 +275,11 @@ async def rescan(
     if previous.get("owner_id") != user["id"]:
         raise HTTPException(status_code=403, detail="only owner can rescan")
     count = await store.count_by_owner(user["id"])
-    if count >= history_limit(user):
-        raise HTTPException(status_code=402, detail="Saved scan limit reached. Upgrade to Pro.")
+    limit = create_limit(user)
+    if count >= limit:
+        if is_pro(user):
+            raise HTTPException(status_code=429, detail=f"Create quota reached ({limit}).")
+        raise HTTPException(status_code=402, detail=_free_exhausted_detail())
     record = await lead.start_scan(
         url=previous["url"],
         attested=True,
