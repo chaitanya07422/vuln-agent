@@ -35,10 +35,10 @@ class CsrfFormsAgent(BaseAgent):
 
         html = resp.get("body") or ""
         headers = {k.lower(): v for k, v in (resp.get("headers") or {}).items()}
-        set_cookie = headers.get("set-cookie") or ""
+        cookie_blob = " ".join(resp.get("set_cookie") or []) or (headers.get("set-cookie") or "")
         has_meta = bool(META_CSRF.search(html))
-        samesite = "samesite" in set_cookie.lower()
-        samesite_none = "samesite=none" in set_cookie.lower()
+        samesite = "samesite" in cookie_blob.lower()
+        samesite_none = "samesite=none" in cookie_blob.lower()
 
         risky = []
         for fm in FORM_RE.finditer(html):

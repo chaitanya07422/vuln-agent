@@ -213,6 +213,13 @@ def _clear_note(agent: str, fp: dict, tags: list) -> str:
     if agent == "tls_depth":
         td = fp.get("tls_depth") or {}
         return f"TLS reviewed ({td.get('version') or 'n/a'})" if td.get("ok") else "TLS reviewed"
+    if agent == "rate_limit_probe":
+        rl = fp.get("rate_limit_probe") or {}
+        if rl.get("skipped"):
+            return "No auth-like endpoint found to probe"
+        return "Auth endpoint burst checked; throttle signals present or N/A"
+    if agent == "redirect_open":
+        return "No confirmed external Location hop on redirect params"
     if agent in (
         "cloud_storage",
         "admin_panels",

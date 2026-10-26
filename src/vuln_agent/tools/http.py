@@ -41,6 +41,7 @@ class HttpRequestTool:
         headers: Optional[Dict[str, str]] = None,
         body: Optional[str] = None,
         max_body_bytes: int = 200_000,
+        follow_redirects: Optional[bool] = None,
     ) -> dict:
         if self.enforce_ssrf and not url_is_safe_target(url, self.allow_hosts):
             return {
@@ -58,9 +59,11 @@ class HttpRequestTool:
         if headers:
             req_headers.update(headers)
 
+        follow = self.follow_redirects if follow_redirects is None else follow_redirects
+
         async with httpx.AsyncClient(
             timeout=self.timeout_sec,
-            follow_redirects=self.follow_redirects,
+            follow_redirects=follow,
             max_redirects=self.max_redirects,
         ) as client:
             try:
@@ -83,12 +86,20 @@ class HttpRequestTool:
             if len(text.encode("utf-8", errors="ignore")) > max_body_bytes:
                 text = text[:max_body_bytes]
 
+            # Preserve distinct Set-Cookie lines (httpx dict merge loses siblings)
+            try:
+                set_cookies = list(resp.headers.get_list("set-cookie"))
+            except Exception:
+                sc = resp.headers.get("set-cookie")
+                set_cookies = [sc] if sc else []
+
             return {
                 "ok": True,
                 "url": str(resp.url),
                 "method": method.upper(),
                 "status_code": resp.status_code,
                 "headers": {k: v for k, v in resp.headers.items()},
+                "set_cookie": set_cookies,
                 "body": text,
                 "elapsed_ms": int(resp.elapsed.total_seconds() * 1000),
             }
