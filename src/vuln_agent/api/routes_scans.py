@@ -1,12 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import PlainTextResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, HttpUrl
 
+from vuln_agent.auth.deps import optional_user, require_user
+from vuln_agent.auth.quotas import create_limit, history_limit, is_pro
 from vuln_agent.core.errors import ScanNotFoundError
+from vuln_agent.core.html_report import render_scan_html
+from vuln_agent.core.scan_diff import diff_findings
 
 router = APIRouter(prefix="/v1/scans", tags=["scans"])
 
@@ -17,6 +21,10 @@ class ScanCreate(BaseModel):
         ...,
         description="Must be true — you own or are authorized to test this site",
     )
+
+
+class ClaimBody(BaseModel):
+    claim_token: str
 
 
 class AgentProgressRow(BaseModel):
@@ -39,25 +47,163 @@ class ScanSummary(BaseModel):
     summary: Optional[Dict[str, Any]] = None
     agents_progress: list[AgentProgressRow] = Field(default_factory=list)
     error: Optional[str] = None
+    owner_id: Optional[str] = None
+    claim_token: Optional[str] = None
+    parent_scan_id: Optional[str] = None
+
+
+def _public_scan(scan: Dict[str, Any], *, include_claim: bool = False) -> Dict[str, Any]:
+    out = dict(scan)
+    if not include_claim:
+        out.pop("claim_token", None)
+    # never expose full audit in list/summary responses unless requested
+    out.pop("audit", None)
+    out.pop("report_md", None)
+    return out
 
 
 @router.post("", response_model=ScanSummary, status_code=202)
-async def create_scan(body: ScanCreate, request: Request) -> Dict[str, Any]:
+async def create_scan(
+    body: ScanCreate,
+    request: Request,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> Dict[str, Any]:
     lead = request.app.state.lead
+    store = request.app.state.store
+    owner_id = user["id"] if user else None
+    if user:
+        count = await store.count_by_owner(owner_id)
+        if count >= history_limit(user):
+            raise HTTPException(
+                status_code=402,
+                detail=f"Saved scan limit reached ({history_limit(user)}). Upgrade to Pro.",
+            )
+        if count >= create_limit(user):
+            raise HTTPException(
+                status_code=429,
+                detail=f"Create quota reached ({create_limit(user)}). Upgrade to Pro or wait.",
+            )
     try:
-        record = await lead.start_scan(url=str(body.url), attested=body.attested)
+        record = await lead.start_scan(
+            url=str(body.url),
+            attested=body.attested,
+            owner_id=owner_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return record
+    return _public_scan(record, include_claim=True)
+
+
+@router.get("")
+async def list_scans(
+    request: Request,
+    user: Dict[str, Any] = Depends(require_user),
+) -> Dict[str, Any]:
+    store = request.app.state.store
+    limit = history_limit(user)
+    items = await store.list_by_owner(user["id"], limit=limit)
+    slim = []
+    for s in items:
+        slim.append(
+            {
+                "id": s.get("id"),
+                "url": s.get("url"),
+                "status": s.get("status"),
+                "created_at": s.get("created_at"),
+                "finished_at": s.get("finished_at"),
+                "summary": s.get("summary"),
+                "parent_scan_id": s.get("parent_scan_id"),
+            }
+        )
+    return {"scans": slim, "limit": limit, "plan": user.get("plan") or "free"}
 
 
 @router.get("/{scan_id}", response_model=ScanSummary)
 async def get_scan(scan_id: str, request: Request) -> Dict[str, Any]:
     store = request.app.state.store
     try:
-        return await store.get(scan_id)
+        scan = await store.get(scan_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=404, detail="scan not found") from exc
+    return _public_scan(scan)
+
+
+@router.post("/{scan_id}/claim", response_model=ScanSummary)
+async def claim_scan(
+    scan_id: str,
+    body: ClaimBody,
+    request: Request,
+    user: Dict[str, Any] = Depends(require_user),
+) -> Dict[str, Any]:
+    store = request.app.state.store
+    try:
+        scan = await store.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    if scan.get("owner_id") and scan.get("owner_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="scan owned by another user")
+    if scan.get("owner_id") == user["id"]:
+        return _public_scan(scan)
+    if not scan.get("claim_token") or scan.get("claim_token") != body.claim_token:
+        raise HTTPException(status_code=403, detail="invalid claim token")
+    count = await store.count_by_owner(user["id"])
+    if count >= history_limit(user):
+        raise HTTPException(
+            status_code=402,
+            detail=f"Saved scan limit reached ({history_limit(user)}). Upgrade to Pro.",
+        )
+    updated = await store.update(scan_id, owner_id=user["id"], claim_token=None)
+    return _public_scan(updated)
+
+
+@router.post("/{scan_id}/rescan", status_code=202)
+async def rescan(
+    scan_id: str,
+    request: Request,
+    user: Dict[str, Any] = Depends(require_user),
+) -> Dict[str, Any]:
+    store = request.app.state.store
+    lead = request.app.state.lead
+    try:
+        previous = await store.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    if previous.get("owner_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="only owner can rescan")
+    count = await store.count_by_owner(user["id"])
+    if count >= history_limit(user):
+        raise HTTPException(status_code=402, detail="Saved scan limit reached. Upgrade to Pro.")
+    record = await lead.start_scan(
+        url=previous["url"],
+        attested=True,
+        owner_id=user["id"],
+        parent_scan_id=scan_id,
+    )
+    return _public_scan(record, include_claim=True)
+
+
+@router.get("/{scan_id}/diff/{other_id}")
+async def scan_diff(
+    scan_id: str,
+    other_id: str,
+    request: Request,
+) -> Dict[str, Any]:
+    store = request.app.state.store
+    try:
+        a = await store.get(scan_id)
+        b = await store.get(other_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    # Treat scan_id as previous, other_id as current when other is newer
+    if (b.get("created_at") or "") < (a.get("created_at") or ""):
+        previous, current = b, a
+    else:
+        previous, current = a, b
+    return {
+        "previous_id": previous.get("id"),
+        "current_id": current.get("id"),
+        "diff": diff_findings(previous.get("findings") or [], current.get("findings") or []),
+    }
 
 
 @router.get("/{scan_id}/report.md")
@@ -71,6 +217,27 @@ async def get_report(scan_id: str, request: Request) -> PlainTextResponse:
     if not md:
         raise HTTPException(status_code=409, detail="report not ready")
     return PlainTextResponse(md, media_type="text/markdown")
+
+
+@router.get("/{scan_id}/report.html")
+async def get_report_html(
+    scan_id: str,
+    request: Request,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> HTMLResponse:
+    store = request.app.state.store
+    try:
+        scan = await store.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    if scan.get("status") != "done":
+        raise HTTPException(status_code=409, detail="report not ready")
+    branded = False
+    if user and (user.get("id") == scan.get("owner_id") or is_pro(user)):
+        branded = is_pro(user)
+    # owners on free get watermark; pro get branded
+    html_doc = render_scan_html(scan, branded=branded)
+    return HTMLResponse(html_doc)
 
 
 @router.get("/{scan_id}/audit.json")

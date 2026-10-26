@@ -37,3 +37,13 @@ class MemoryScanStore:
             items = list(self._scans.values())
             items.sort(key=lambda s: s.get("created_at") or "", reverse=True)
             return [deepcopy(s) for s in items[:limit]]
+
+    async def list_by_owner(self, owner_id: str, limit: int = 50) -> list:
+        async with self._lock:
+            items = [s for s in self._scans.values() if s.get("owner_id") == owner_id]
+            items.sort(key=lambda s: s.get("created_at") or "", reverse=True)
+            return [deepcopy(s) for s in items[:limit]]
+
+    async def count_by_owner(self, owner_id: str) -> int:
+        async with self._lock:
+            return sum(1 for s in self._scans.values() if s.get("owner_id") == owner_id)

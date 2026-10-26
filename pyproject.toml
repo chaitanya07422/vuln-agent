@@ -18,6 +18,8 @@ dependencies = [
   "python-multipart>=0.0.9",
   "motor>=3.5.0",
   "arq>=0.26.0",
+  "PyJWT>=2.8.0",
+  "redis>=5.0.0",
 ]
 
 [tool.setuptools.package-data]

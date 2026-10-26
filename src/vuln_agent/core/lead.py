@@ -91,12 +91,22 @@ class LeadRunner:
         )
         return ToolBus(http)
 
-    async def start_scan(self, *, url: str, attested: bool) -> Dict[str, Any]:
+    async def start_scan(
+        self,
+        *,
+        url: str,
+        attested: bool,
+        owner_id: str | None = None,
+        parent_scan_id: str | None = None,
+    ) -> Dict[str, Any]:
         if not attested:
             raise ValueError("attestation required")
         scope = Scope.from_url(url)
         scan_id = str(uuid4())
         progress = initial_agents_progress(self.settings.enabled_agents)
+        import secrets
+
+        claim_token = secrets.token_urlsafe(18)
         record = {
             "id": scan_id,
             "url": url,
@@ -112,6 +122,9 @@ class LeadRunner:
             "risk_path": None,
             "summary": None,
             "agents_progress": progress,
+            "owner_id": owner_id,
+            "claim_token": claim_token,
+            "parent_scan_id": parent_scan_id,
         }
         await self.store.create(record)
         await self._enqueue(scan_id, url, scope)

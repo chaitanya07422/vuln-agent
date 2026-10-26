@@ -7,7 +7,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from vuln_agent.api.routes_auth import router as auth_router
+from vuln_agent.api.routes_billing import router as billing_router
 from vuln_agent.api.routes_scans import router as scans_router
+from vuln_agent.auth.refresh_store import build_refresh_store
+from vuln_agent.auth.users import build_user_store
 from vuln_agent.core.lead import LeadRunner
 from vuln_agent.llm.factory import build_llm_router
 from vuln_agent.playbook_loader import default_playbook_store
@@ -18,6 +22,8 @@ from vuln_agent.store.mongo import build_store
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or Settings.load()
     store = build_store(settings.mongo_uri)
+    users = build_user_store(settings.mongo_uri)
+    refresh_store = build_refresh_store(settings.redis_url)
     playbooks = default_playbook_store(settings.config)
     llm = build_llm_router(settings.llm)
     lead = LeadRunner(settings, store, playbooks=playbooks, llm=llm)
@@ -25,6 +31,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="vuln-agent", version="0.1.0")
     app.state.settings = settings
     app.state.store = store
+    app.state.users = users
+    app.state.refresh_store = refresh_store
+    app.state.oauth_states = {}
     app.state.lead = lead
     app.state.playbooks = playbooks
     app.state.llm = llm
@@ -45,6 +54,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
+    app.include_router(auth_router)
+    app.include_router(billing_router)
     app.include_router(scans_router)
 
     web_dir = Path(__file__).resolve().parent / "web"
@@ -57,11 +68,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/health")
     async def health() -> dict:
+        from vuln_agent.auth import google_oauth
+
         return {
             "ok": True,
             "enabled_agents": settings.enabled_agents,
             "playbooks": sorted(playbooks._cache.keys()),
             "store": type(store).__name__,
+            "auth": {"google": google_oauth.google_configured()},
             "llm": {
                 "lead": llm.provider_name("lead"),
                 "adapt": llm.provider_name("adapt"),

@@ -42,6 +42,17 @@ class MongoScanStore:
         cursor = self._col.find({}, {"_id": 0}).sort("created_at", -1).limit(limit)
         return [doc async for doc in cursor]
 
+    async def list_by_owner(self, owner_id: str, limit: int = 50) -> list:
+        cursor = (
+            self._col.find({"owner_id": owner_id}, {"_id": 0})
+            .sort("created_at", -1)
+            .limit(limit)
+        )
+        return [doc async for doc in cursor]
+
+    async def count_by_owner(self, owner_id: str) -> int:
+        return int(await self._col.count_documents({"owner_id": owner_id}))
+
 
 def build_store(mongo_uri: Optional[str]):
     if mongo_uri:

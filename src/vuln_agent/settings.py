@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Keys providers read via os.getenv (not VULN_AGENT_* settings fields)
-_LLM_ENV_KEYS = (
+_DOTENV_EXPORT_KEYS = (
     "GEMINI_API_KEY",
     "GOOGLE_API_KEY",
     "VULN_AGENT_GEMINI_API_KEY",
@@ -20,11 +20,21 @@ _LLM_ENV_KEYS = (
     "VULN_AGENT_GEMINI_MODEL",
     "VULN_AGENT_CLAUDE_MODEL",
     "VULN_AGENT_OPENAI_MODEL",
+    "GOOGLE_CLIENT_ID",
+    "GOOGLE_CLIENT_SECRET",
+    "GOOGLE_CALLBACK_URL",
+    "VULN_AGENT_FRONTEND_URL",
+    "VULN_AGENT_JWT_SECRET",
+    "JWT_SECRET",
+    "RAZORPAY_KEY_ID",
+    "RAZORPAY_KEY_SECRET",
+    "RAZORPAY_WEBHOOK_SECRET",
+    "VULN_AGENT_COOKIE_SECURE",
 )
 
 
 def _export_llm_keys_from_dotenv(path: Path) -> None:
-    """Ensure API keys in .env are visible to LLM providers via os.environ."""
+    """Ensure secrets in .env are visible via os.environ for providers/auth."""
     if not path.is_file():
         return
     for raw in path.read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -33,7 +43,7 @@ def _export_llm_keys_from_dotenv(path: Path) -> None:
             continue
         key, _, val = line.partition("=")
         key = key.strip()
-        if key not in _LLM_ENV_KEYS:
+        if key not in _DOTENV_EXPORT_KEYS:
             continue
         val = val.strip().strip("'").strip('"')
         if val and key not in os.environ:
@@ -66,6 +76,7 @@ class Settings(BaseSettings):
     mongo_uri: Optional[str] = None
     redis_url: Optional[str] = None
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    frontend_url: str = "http://localhost:3000"
     enabled_agents: List[str] = Field(default_factory=lambda: ["recon", "reporter"])
     limits: Limits = Field(default_factory=Limits)
     http: HttpConfig = Field(default_factory=HttpConfig)
@@ -94,6 +105,8 @@ class Settings(BaseSettings):
         http = HttpConfig(**(data.get("http") or {}))
         llm = dict(base.llm)
         llm.update(data.get("llm") or {})
+        if base.frontend_url and "VULN_AGENT_FRONTEND_URL" not in os.environ:
+            os.environ["VULN_AGENT_FRONTEND_URL"] = base.frontend_url
         return cls(
             config=str(path),
             enabled_agents=list(data.get("enabled_agents") or ["recon", "reporter"]),
@@ -104,5 +117,6 @@ class Settings(BaseSettings):
             mongo_uri=base.mongo_uri,
             redis_url=base.redis_url,
             cors_origins=base.cors_origins,
+            frontend_url=base.frontend_url,
             llm=llm,
         )
