@@ -34,6 +34,13 @@ enabled_agents:
   - rate_limit_probe
   - dependency_meta
   - input_hygiene
+  - csrf_forms
+  - access_hint
+  - ssrf_hint
+  - xss_reflect_safe
+  - auth_enum
+  - cve_stack
+  - tls_depth
   - adapt
   - compliance_map
   - executive_brief
@@ -42,7 +49,7 @@ enabled_agents:
 limits:
   max_rps: 7
   request_timeout_sec: 15
-  scan_timeout_sec: 360
+  scan_timeout_sec: 420
 
 http:
   user_agent: "vuln-agent/0.1 (+authorized-scan)"

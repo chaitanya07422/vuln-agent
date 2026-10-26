@@ -43,6 +43,13 @@ AGENT_LABELS = {
     "rate_limit_probe": "Rate-limit probe",
     "dependency_meta": "Manifests & generator",
     "input_hygiene": "Input hygiene",
+    "csrf_forms": "CSRF form hygiene",
+    "access_hint": "Unauth access hints",
+    "ssrf_hint": "SSRF parameter hints",
+    "xss_reflect_safe": "XSS reflection (safe)",
+    "auth_enum": "Auth enumeration",
+    "cve_stack": "Version / CVE signals",
+    "tls_depth": "TLS certificate depth",
     "adapt": "Extra path probes",
     "compliance_map": "OWASP theme map",
     "executive_brief": "Executive brief",
@@ -203,6 +210,9 @@ def _clear_note(agent: str, fp: dict, tags: list) -> str:
         ih = fp.get("input_hygiene") or {}
         n = ih.get("probes") or 0
         return f"Benign input probes run ({n}); no leaky validation errors"
+    if agent == "tls_depth":
+        td = fp.get("tls_depth") or {}
+        return f"TLS reviewed ({td.get('version') or 'n/a'})" if td.get("ok") else "TLS reviewed"
     if agent in (
         "cloud_storage",
         "admin_panels",
@@ -226,6 +236,12 @@ def _clear_note(agent: str, fp: dict, tags: list) -> str:
         "cache_poison_hint",
         "rate_limit_probe",
         "dependency_meta",
+        "csrf_forms",
+        "access_hint",
+        "ssrf_hint",
+        "xss_reflect_safe",
+        "auth_enum",
+        "cve_stack",
     ):
         block = fp.get(agent) or {}
         if isinstance(block, dict) and block.get("skipped"):

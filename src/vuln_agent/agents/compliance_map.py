@@ -8,9 +8,9 @@ from vuln_agent.core.context import ScanContext
 # Report-layer: map findings → OWASP-style tags in fingerprint/summary. No new probes.
 
 OWASP_MAP = {
-    "A01: Broken Access Control": {"admin", "users", "auth", "oauth", "redirect", "actuator"},
-    "A02: Cryptographic Failures": {"tls", "secrets", "jwt", "dkim", "spf", "dmarc", "cookies"},
-    "A03: Injection": {"graphql", "xmlrpc", "input", "validation"},
+    "A01: Broken Access Control": {"admin", "users", "auth", "oauth", "redirect", "actuator", "access", "idor", "ssrf", "csrf"},
+    "A02: Cryptographic Failures": {"tls", "secrets", "jwt", "dkim", "spf", "dmarc", "cookies", "cert"},
+    "A03: Injection": {"graphql", "xmlrpc", "input", "validation", "xss", "reflection"},
     "A04: Insecure Design": {"rate-limit", "cors", "client-validation"},
     "A05: Security Misconfiguration": {
         "headers",
@@ -24,10 +24,12 @@ OWASP_MAP = {
         "sourcemap",
         "cdn",
         "cache",
+        "csp",
+        "cve",
     },
-    "A07: Identification & Auth Failures": {"auth", "oauth", "session", "jwt", "cookies"},
+    "A07: Identification & Auth Failures": {"auth", "oauth", "session", "jwt", "cookies", "enum", "mfa", "reset"},
     "A09: Security Logging & Monitoring": {"rate-limit"},
-    "A10: SSRF": {"redirect", "oauth"},
+    "A10: SSRF": {"redirect", "oauth", "ssrf"},
 }
 
 
