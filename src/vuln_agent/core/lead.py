@@ -212,6 +212,14 @@ class LeadRunner:
             for agent in reporter:
                 await _maybe_run(agent)
 
+            # Snapshot LLM token usage into fingerprint for UI / billing insight
+            if ctx.llm and hasattr(ctx.llm, "usage_summary"):
+                try:
+                    ctx.fingerprint = dict(ctx.fingerprint or {})
+                    ctx.fingerprint["llm_usage"] = ctx.llm.usage_summary()
+                except Exception:
+                    pass
+
             findings = [f.model_dump() if isinstance(f, Finding) else f for f in ctx.findings]
             md = ctx.report_md or render_markdown(
                 {

@@ -39,6 +39,23 @@ def build_company_brief(ctx: ScanContext) -> str:
     owasp = (ctx.fingerprint or {}).get("owasp_attention") or []
     if owasp:
         lines.extend(["**OWASP themes:** " + ", ".join(owasp), ""])
+    llm_usage = {}
+    if ctx.llm and hasattr(ctx.llm, "usage_summary"):
+        try:
+            llm_usage = ctx.llm.usage_summary() or {}
+        except Exception:
+            llm_usage = (ctx.fingerprint or {}).get("llm_usage") or {}
+    else:
+        llm_usage = (ctx.fingerprint or {}).get("llm_usage") or {}
+    if llm_usage.get("call_count"):
+        lines.extend(
+            [
+                f"**LLM usage:** {llm_usage.get('call_count')} call(s), "
+                f"{llm_usage.get('total_tokens', 0)} tokens "
+                f"(models: {', '.join((llm_usage.get('by_model') or {}).keys()) or 'n/a'})",
+                "",
+            ]
+        )
     if summary.get("agents"):
         lines.extend(["## What each agent checked", ""])
         for row in summary["agents"]:

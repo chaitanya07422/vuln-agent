@@ -14,6 +14,8 @@ class NullLLM:
     """Default: no external LLM calls. Swap via config later."""
 
     name = "null"
+    model = "null"
+    last_usage = None
 
     async def complete(self, prompt: str, *, system: Optional[str] = None) -> str:
         return ""

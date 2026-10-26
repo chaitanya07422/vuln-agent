@@ -6,6 +6,7 @@ from typing import Optional
 import httpx
 
 from vuln_agent.llm.base import NullLLM
+from vuln_agent.llm.usage import LLMCallUsage, estimate_tokens
 
 
 class OpenAIProvider:
@@ -14,6 +15,7 @@ class OpenAIProvider:
     def __init__(self, api_key: str, model: str = "gpt-4o-mini") -> None:
         self.api_key = api_key
         self.model = model
+        self.last_usage: Optional[LLMCallUsage] = None
 
     async def complete(self, prompt: str, *, system: Optional[str] = None) -> str:
         messages = []
@@ -31,7 +33,22 @@ class OpenAIProvider:
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"].strip()
+            text = data["choices"][0]["message"]["content"].strip()
+            usage = data.get("usage") or {}
+            pt = int(usage.get("prompt_tokens") or 0)
+            ct = int(usage.get("completion_tokens") or 0)
+            if not pt and not ct:
+                pt = estimate_tokens((system or "") + prompt)
+                ct = estimate_tokens(text)
+            self.last_usage = LLMCallUsage(
+                provider=self.name,
+                model=self.model,
+                prompt_tokens=pt,
+                completion_tokens=ct,
+                total_tokens=int(usage.get("total_tokens") or (pt + ct)),
+                ok=True,
+            )
+            return text
 
 
 class ClaudeProvider:
@@ -40,6 +57,7 @@ class ClaudeProvider:
     def __init__(self, api_key: str, model: str = "claude-3-5-haiku-latest") -> None:
         self.api_key = api_key
         self.model = model
+        self.last_usage: Optional[LLMCallUsage] = None
 
     async def complete(self, prompt: str, *, system: Optional[str] = None) -> str:
         async with httpx.AsyncClient(timeout=45.0) as client:
@@ -63,7 +81,22 @@ class ClaudeProvider:
             data = resp.json()
             parts = data.get("content") or []
             texts = [p.get("text", "") for p in parts if p.get("type") == "text"]
-            return "\n".join(texts).strip()
+            text = "\n".join(texts).strip()
+            usage = data.get("usage") or {}
+            pt = int(usage.get("input_tokens") or 0)
+            ct = int(usage.get("output_tokens") or 0)
+            if not pt and not ct:
+                pt = estimate_tokens((system or "") + prompt)
+                ct = estimate_tokens(text)
+            self.last_usage = LLMCallUsage(
+                provider=self.name,
+                model=self.model,
+                prompt_tokens=pt,
+                completion_tokens=ct,
+                total_tokens=pt + ct,
+                ok=True,
+            )
+            return text
 
 
 class GeminiProvider:
@@ -72,12 +105,13 @@ class GeminiProvider:
     def __init__(self, api_key: str, model: str = "gemini-flash-latest") -> None:
         self.api_key = api_key
         self.model = model
+        self.last_usage: Optional[LLMCallUsage] = None
 
     async def complete(self, prompt: str, *, system: Optional[str] = None) -> str:
         text = f"{system}\n\n{prompt}" if system else prompt
         # Prefer configured model, then current Flash aliases
         models = [self.model]
-        for alt in ("gemini-flash-latest", "gemini-3.8-flash", "gemini-2.5-flash"):
+        for alt in ("gemini-flash-latest", "gemini-2.5-flash", "gemini-2.0-flash"):
             if alt not in models:
                 models.append(alt)
 
@@ -96,18 +130,48 @@ class GeminiProvider:
                     )
                     if resp.status_code == 404:
                         continue
-                    resp.raise_for_status()
+                    if resp.status_code >= 400:
+                        last_err = RuntimeError(f"Gemini {model} HTTP {resp.status_code}: {resp.text[:200]}")
+                        self.last_usage = LLMCallUsage(
+                            provider=self.name,
+                            model=model,
+                            ok=False,
+                            error=f"HTTP {resp.status_code}",
+                        )
+                        continue
                     data = resp.json()
                     candidates = data.get("candidates") or []
                     if not candidates:
                         continue
                     parts = candidates[0].get("content", {}).get("parts") or []
                     out = "".join(p.get("text", "") for p in parts).strip()
+                    meta = data.get("usageMetadata") or {}
+                    pt = int(meta.get("promptTokenCount") or 0)
+                    ct = int(meta.get("candidatesTokenCount") or 0)
+                    tt = int(meta.get("totalTokenCount") or (pt + ct))
+                    if not tt:
+                        pt = estimate_tokens(text)
+                        ct = estimate_tokens(out)
+                        tt = pt + ct
                     if out:
                         self.model = model
+                        self.last_usage = LLMCallUsage(
+                            provider=self.name,
+                            model=model,
+                            prompt_tokens=pt,
+                            completion_tokens=ct,
+                            total_tokens=tt,
+                            ok=True,
+                        )
                         return out
                 except Exception as exc:  # noqa: BLE001
                     last_err = exc
+                    self.last_usage = LLMCallUsage(
+                        provider=self.name,
+                        model=model,
+                        ok=False,
+                        error=f"{type(exc).__name__}: {exc}"[:200],
+                    )
                     continue
         if last_err:
             raise last_err
