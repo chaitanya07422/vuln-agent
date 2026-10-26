@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from vuln_agent.core.context import ScanContext, Scope
 from vuln_agent.core.finding import Finding
+from vuln_agent.core.progress import initial_agents_progress, set_agent_status
 from vuln_agent.core.registry import load_agents
 from vuln_agent.llm.router import LLMRouter
 from vuln_agent.playbook_loader import PlaybookStore, default_playbook_store
@@ -95,6 +96,7 @@ class LeadRunner:
             raise ValueError("attestation required")
         scope = Scope.from_url(url)
         scan_id = str(uuid4())
+        progress = initial_agents_progress(self.settings.enabled_agents)
         record = {
             "id": scan_id,
             "url": url,
@@ -109,6 +111,7 @@ class LeadRunner:
             "report_md": None,
             "risk_path": None,
             "summary": None,
+            "agents_progress": progress,
         }
         await self.store.create(record)
         await self._enqueue(scan_id, url, scope)
@@ -133,7 +136,9 @@ class LeadRunner:
         asyncio.create_task(self.run_scan(scan_id, url, scope))
 
     async def run_scan(self, scan_id: str, url: str, scope: Scope) -> None:
-        await self.store.update(scan_id, status="running")
+        progress = initial_agents_progress(self.settings.enabled_agents)
+        progress_lock = asyncio.Lock()
+        await self.store.update(scan_id, status="running", agents_progress=progress)
         tools = self._tools(allow_hosts=list(scope.allow_hosts))
         ctx = ScanContext(
             scan_id=scan_id,
@@ -144,6 +149,13 @@ class LeadRunner:
             llm=self.llm,
         )
 
+        async def _mark(agent_name: str, status: str) -> None:
+            nonlocal progress
+            async with progress_lock:
+                progress = set_agent_status(progress, agent_name, status)
+                snapshot = [dict(row) for row in progress]
+            await self.store.update(scan_id, agents_progress=snapshot)
+
         try:
             agents = load_agents(self.settings.enabled_agents)
             recon = [a for a in agents if a.name == "recon"]
@@ -153,21 +165,27 @@ class LeadRunner:
             adapt = [a for a in agents if a.name == "adapt"]
             mid = [a for a in agents if a.name not in ("recon", "reporter", "js_audit", "adapt")]
 
-            for agent in recon:
-                await agent.run(ctx)
-
-            tags = set((ctx.fingerprint or {}).get("tags") or [])
-
             async def _maybe_run(agent) -> None:
-                if agent.requires_tags and not set(agent.requires_tags).issubset(tags):
+                tags_now = set((ctx.fingerprint or {}).get("tags") or [])
+                if agent.requires_tags and not set(agent.requires_tags).issubset(tags_now):
+                    await _mark(agent.name, "skipped")
                     return
-                if agent.skip_if_tags and set(agent.skip_if_tags) & tags:
+                if agent.skip_if_tags and set(agent.skip_if_tags) & tags_now:
+                    await _mark(agent.name, "skipped")
                     return
-                await agent.run(ctx)
+                await _mark(agent.name, "running")
+                try:
+                    await agent.run(ctx)
+                except Exception:
+                    await _mark(agent.name, "failed")
+                    raise
+                await _mark(agent.name, "done")
+
+            for agent in recon:
+                await _maybe_run(agent)
 
             for agent in js_audit:
                 await _maybe_run(agent)
-            tags = set((ctx.fingerprint or {}).get("tags") or [])
 
             if mid:
                 await asyncio.wait_for(
@@ -179,7 +197,7 @@ class LeadRunner:
                 await _maybe_run(agent)
 
             for agent in reporter:
-                await agent.run(ctx)
+                await _maybe_run(agent)
 
             findings = [f.model_dump() if isinstance(f, Finding) else f for f in ctx.findings]
             md = ctx.report_md or render_markdown(
@@ -203,6 +221,7 @@ class LeadRunner:
                 report_md=md,
                 risk_path=ctx.risk_path,
                 summary=ctx.summary,
+                agents_progress=progress,
             )
         except Exception as exc:  # noqa: BLE001
             await self.store.update(
@@ -213,4 +232,5 @@ class LeadRunner:
                 fingerprint=ctx.fingerprint,
                 findings=[f.model_dump() for f in ctx.findings],
                 audit=ctx.audit,
+                agents_progress=progress,
             )

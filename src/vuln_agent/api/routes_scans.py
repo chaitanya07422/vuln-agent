@@ -19,6 +19,14 @@ class ScanCreate(BaseModel):
     )
 
 
+class AgentProgressRow(BaseModel):
+    agent: str
+    label: str
+    status: str
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+
+
 class ScanSummary(BaseModel):
     id: str
     url: str
@@ -29,6 +37,7 @@ class ScanSummary(BaseModel):
     findings: list = Field(default_factory=list)
     risk_path: Optional[str] = None
     summary: Optional[Dict[str, Any]] = None
+    agents_progress: list[AgentProgressRow] = Field(default_factory=list)
     error: Optional[str] = None
 
 

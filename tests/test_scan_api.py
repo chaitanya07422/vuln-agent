@@ -64,6 +64,10 @@ async def test_scan_example_com_e2e(app):
         assert final is not None
         assert final["status"] == "done", final
         assert "tags" in final["fingerprint"]
+        progress = final.get("agents_progress") or []
+        assert progress, "expected live agents_progress on scan"
+        assert {row["agent"] for row in progress} >= {"recon", "reporter"}
+        assert all(row["status"] in ("done", "skipped", "failed") for row in progress)
         summary = final.get("summary") or {}
         assert summary.get("verdict") in ("looks_solid", "minor_notes", "issues_found")
         assert summary.get("headline")
