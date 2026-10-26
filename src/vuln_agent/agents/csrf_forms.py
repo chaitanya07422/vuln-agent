@@ -73,7 +73,7 @@ class CsrfFormsAgent(BaseAgent):
                 )
             )
 
-        if set_cookie and not samesite:
+        if cookie_blob and not samesite:
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
