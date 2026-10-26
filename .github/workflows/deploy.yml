@@ -75,14 +75,17 @@ jobs:
             fi
             .venv/bin/pip install -U pip
             .venv/bin/pip install -e .
-            # optional LLM extras if present on server already; ignore failures
-            .venv/bin/pip install google-generativeai 2>/dev/null || true
+            # Keep existing Gemini deps; do not reinstall heavy google stack every deploy
+            if ! .venv/bin/python -c "import google.generativeai" 2>/dev/null; then
+              .venv/bin/pip install "google-generativeai>=0.8.0"
+            fi
 
             export PATH="$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node 2>/dev/null | tail -1)/bin:/usr/bin:$PATH"
             command -v pm2 >/dev/null || { echo "pm2 not installed"; exit 1; }
 
-            cp "$API/ecosystem.config.cjs" /home/ubuntu/apps/scanlead/ecosystem.api.cjs
-            pm2 startOrReload /home/ubuntu/apps/scanlead/ecosystem.api.cjs --update-env
+            # PM2 7 startOrReload can crash on .cjs; delete + start is reliable
+            pm2 delete scanlead-api scanlead-worker 2>/dev/null || true
+            pm2 start "$API/ecosystem.config.cjs" --update-env
             pm2 save
 
             for i in $(seq 1 20); do
