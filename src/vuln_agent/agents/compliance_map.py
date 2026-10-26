@@ -10,8 +10,8 @@ from vuln_agent.core.context import ScanContext
 OWASP_MAP = {
     "A01: Broken Access Control": {"admin", "users", "auth", "oauth", "redirect", "actuator"},
     "A02: Cryptographic Failures": {"tls", "secrets", "jwt", "dkim", "spf", "dmarc", "cookies"},
-    "A03: Injection": {"graphql", "xmlrpc"},
-    "A04: Insecure Design": {"rate-limit", "cors"},
+    "A03: Injection": {"graphql", "xmlrpc", "input", "validation"},
+    "A04: Insecure Design": {"rate-limit", "cors", "client-validation"},
     "A05: Security Misconfiguration": {
         "headers",
         "cors",

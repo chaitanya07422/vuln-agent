@@ -33,6 +33,7 @@ enabled_agents:
   - cache_poison_hint
   - rate_limit_probe
   - dependency_meta
+  - input_hygiene
   - adapt
   - compliance_map
   - executive_brief

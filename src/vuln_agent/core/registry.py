@@ -41,6 +41,7 @@ AGENT_ENTRYPOINTS: Dict[str, str] = {
     "cache_poison_hint": "vuln_agent.agents.cache_poison_hint:CachePoisonHintAgent",
     "rate_limit_probe": "vuln_agent.agents.rate_limit_probe:RateLimitProbeAgent",
     "dependency_meta": "vuln_agent.agents.dependency_meta:DependencyMetaAgent",
+    "input_hygiene": "vuln_agent.agents.input_hygiene:InputHygieneAgent",
     "adapt": "vuln_agent.agents.adapt:AdaptAgent",
     "compliance_map": "vuln_agent.agents.compliance_map:ComplianceMapAgent",
     "executive_brief": "vuln_agent.agents.executive_brief:ExecutiveBriefAgent",

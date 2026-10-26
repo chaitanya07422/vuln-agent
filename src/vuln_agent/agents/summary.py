@@ -42,6 +42,7 @@ AGENT_LABELS = {
     "cache_poison_hint": "Cache poison hints",
     "rate_limit_probe": "Rate-limit probe",
     "dependency_meta": "Manifests & generator",
+    "input_hygiene": "Input hygiene",
     "adapt": "Extra path probes",
     "compliance_map": "OWASP theme map",
     "executive_brief": "Executive brief",
@@ -198,6 +199,10 @@ def _clear_note(agent: str, fp: dict, tags: list) -> str:
         return f"OWASP themes noted: {', '.join(themes[:3])}" if themes else "No OWASP theme hits"
     if agent == "executive_brief":
         return "Executive summary prepared"
+    if agent == "input_hygiene":
+        ih = fp.get("input_hygiene") or {}
+        n = ih.get("probes") or 0
+        return f"Benign input probes run ({n}); no leaky validation errors"
     if agent in (
         "cloud_storage",
         "admin_panels",
