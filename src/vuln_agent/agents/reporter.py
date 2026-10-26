@@ -10,6 +10,7 @@ from vuln_agent.agents.risk_path import build_risk_path
 from vuln_agent.agents.summary import build_scan_summary, strip_noise_findings
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
+from vuln_agent.llm.prompts import REPORTER_SYSTEM, format_reporter_user
 
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
@@ -141,17 +142,8 @@ class ReporterAgent(BaseAgent):
         if role:
             polished = await ctx.llm.complete(
                 role,  # type: ignore[arg-type]
-                (
-                    "Polish this authorized security brief for a company audience. "
-                    "Keep the per-agent summary, severities, evidence, and fixes. "
-                    "Do not invent findings. Do not add exploit detail. "
-                    "Only say the site is fully clear if the brief already says so. "
-                    "Return markdown only.\n\n" + brief
-                ),
-                system=(
-                    "You are a concise application-security writer for business clients. "
-                    "Never invent findings. Never claim everything is perfect unless the brief does."
-                ),
+                format_reporter_user(brief=brief),
+                system=REPORTER_SYSTEM,
             )
             if polished and polished.strip().startswith("#"):
                 brief = polished.strip()

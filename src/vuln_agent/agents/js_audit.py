@@ -8,6 +8,7 @@ from vuln_agent.agents.base import BaseAgent
 from vuln_agent.agents.js_discover import extract_api_paths, script_urls
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
+from vuln_agent.llm.prompts import JS_AUDIT_SYSTEM, format_js_audit_user
 
 # Deterministic patterns — no login required; catches
 # Production SPA bundles are often 0.5–2MB; keywords sit past small HTTP caps.
@@ -61,15 +62,6 @@ PATTERNS = [
         "tags": ["js", "upload", "surface"],
     },
 ]
-
-
-LLM_SYSTEM = (
-    "You are a secure-code reviewer for a website JS bundle. "
-    "Only report issues supported by the snippets. "
-    "Do not invent endpoints. Output one finding per line: "
-    "SEVERITY|short title|evidence quote (<=80 chars). "
-    "SEVERITY must be high, medium, or low. Max 6 lines. No markdown."
-)
 
 
 class JsAuditAgent(BaseAgent):
@@ -200,13 +192,14 @@ class JsAuditAgent(BaseAgent):
                 if idx >= 0:
                     excerpts.append(sample[max(0, idx - 120) : idx + 220])
             if excerpts:
-                prompt = (
-                    f"Site: {ctx.url}\nFingerprint: {ctx.fingerprint}\n"
-                    f"Known API paths: {sorted(api_paths)[:25]}\n"
-                    "JS excerpts:\n" + "\n---\n".join(excerpts[:8])
+                prompt = format_js_audit_user(
+                    url=ctx.url,
+                    fingerprint=ctx.fingerprint,
+                    api_paths=sorted(api_paths)[:25],
+                    excerpts=excerpts[:8],
                 )
                 try:
-                    text = await ctx.llm.complete("adapt", prompt, system=LLM_SYSTEM)
+                    text = await ctx.llm.complete("adapt", prompt, system=JS_AUDIT_SYSTEM)
                 except Exception:
                     text = ""
                 for line in (text or "").splitlines():

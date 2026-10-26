@@ -4,19 +4,7 @@ from typing import List, Optional, Set
 
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
-
-RISK_PATH_SYSTEM = (
-    "You write a SHORT risk story for a non-technical business client. "
-    "Describe how an outsider might abuse the combined findings at a high level. "
-    "Rules (strict):\n"
-    "- 3 to 5 numbered steps only\n"
-    "- Each step one short sentence\n"
-    "- No payloads, code, commands, headers, bypass tricks, tool names, or how-to detail\n"
-    "- Only use risks that appear in the listed findings — never invent upload/XML-RPC/etc.\n"
-    "- Adapt language to whatever stack/findings you see (any website)\n"
-    "- End with one line: 'Priority fix:' naming the first control to harden\n"
-    "This must help the client understand impact — not help an attacker operate."
-)
+from vuln_agent.llm.prompts import RISK_PATH_SYSTEM, format_risk_path_user
 
 
 def _pick_role(ctx: ScanContext) -> Optional[str]:
@@ -170,11 +158,10 @@ async def build_risk_path(ctx: ScanContext) -> str:
         bullets.append(
             f"- [{f.severity}] ({f.agent}) {f.title} | evidence={(f.evidence_snippet or '')[:120]}"
         )
-    prompt = (
-        f"Site: {ctx.url}\n"
-        f"Stack hints: {ctx.fingerprint}\n"
-        f"Priority findings:\n" + "\n".join(bullets) + "\n\n"
-        "Write the brief risk path now. Only use the findings above."
+    prompt = format_risk_path_user(
+        url=ctx.url,
+        fingerprint=ctx.fingerprint,
+        bullets=bullets,
     )
     try:
         text = await ctx.llm.complete(role, prompt, system=RISK_PATH_SYSTEM)  # type: ignore[arg-type]

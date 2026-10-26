@@ -12,6 +12,7 @@ from vuln_agent.agents.content_guards import (
 )
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
+from vuln_agent.llm.prompts import ADAPT_SYSTEM, format_adapt_user
 from vuln_agent.tools.safety import url_is_safe_target
 
 CANDIDATE_PATHS: List[str] = [
@@ -31,14 +32,6 @@ CANDIDATE_PATHS: List[str] = [
     "/swagger.json",
     "/openapi.json",
 ]
-
-ADAPT_SYSTEM = (
-    "You help pick ONE-SHOT detect-only HTTP paths for an external website scan. "
-    "Prefer API and upload/admin surfaces over random CMS paths when the stack is SPA/Express/React. "
-    "When JS already lists /api/* paths, suggest close cousins only (siblings under same prefix). "
-    "Never suggest password sprays or multi-step exploits. "
-    "Reply with up to 8 paths only, one per line, each starting with /. No commentary."
-)
 
 
 def parse_paths_from_llm(text: str, limit: int = 8) -> List[str]:
@@ -112,15 +105,14 @@ class AdaptAgent(BaseAgent):
 
         tags = list((ctx.fingerprint or {}).get("tags") or [])
         if ctx.llm and ctx.llm.provider_name("adapt") != "null":
-            prompt = (
-                f"Target URL: {ctx.url}\n"
-                f"Fingerprint tags: {tags}\n"
-                f"Fingerprint detail: { {k:v for k,v in (ctx.fingerprint or {}).items() if k!='js_api_paths'} }\n"
-                f"API paths already seen in JS: {js_paths[:30]}\n"
-                "Suggest additional one-shot paths useful for finding: "
-                "public JSON APIs, upload/presign, admin login, object/file routes, "
-                "swagger/docs, env/git leaks. "
-                "If SPA/Express, prioritize /api/* over WordPress paths."
+            detail = {
+                k: v for k, v in (ctx.fingerprint or {}).items() if k != "js_api_paths"
+            }
+            prompt = format_adapt_user(
+                url=ctx.url,
+                tags=tags,
+                fingerprint_detail=detail,
+                js_paths=js_paths[:30],
             )
             try:
                 text = await ctx.llm.complete("adapt", prompt, system=ADAPT_SYSTEM)

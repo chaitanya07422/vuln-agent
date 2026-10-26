@@ -5,15 +5,7 @@ from typing import List, Optional, Tuple
 
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
-
-EXPLAIN_SYSTEM = (
-    "You are an application-security analyst writing for a product/engineering audience. "
-    "For each finding, explain why it matters on THIS stack (use fingerprint/tags) "
-    "and give a concrete remediation. "
-    "Do not invent endpoints, status codes, or evidence. "
-    "Do not change severity. Keep each WHY and FIX to 1–3 clear sentences. "
-    "No markdown fences. No preamble."
-)
+from vuln_agent.llm.prompts import EXPLAIN_SYSTEM, format_explain_user
 
 
 def _pick_role(ctx: ScanContext) -> Optional[str]:
@@ -27,16 +19,7 @@ def _pick_role(ctx: ScanContext) -> Optional[str]:
 
 
 def build_explain_prompt(ctx: ScanContext, findings: List[Finding]) -> str:
-    lines = [
-        f"Target: {ctx.url}",
-        f"Fingerprint: {ctx.fingerprint}",
-        "",
-        "Write one block per finding using EXACTLY this format:",
-        "N|WHY|<plain text>|FIX|<plain text>",
-        "where N is the finding number below.",
-        "",
-        "Findings:",
-    ]
+    lines: List[str] = []
     for i, f in enumerate(findings, 1):
         lines.extend(
             [
@@ -48,7 +31,11 @@ def build_explain_prompt(ctx: ScanContext, findings: List[Finding]) -> str:
                 "",
             ]
         )
-    return "\n".join(lines)
+    return format_explain_user(
+        url=ctx.url,
+        fingerprint=ctx.fingerprint,
+        findings_block="\n".join(lines),
+    )
 
 
 def parse_explain_lines(text: str, count: int) -> List[Tuple[str, str]]:
