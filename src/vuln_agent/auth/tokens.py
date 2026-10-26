@@ -58,4 +58,5 @@ def public_user(user: Dict[str, Any]) -> Dict[str, Any]:
         "picture": user.get("picture"),
         "plan": user.get("plan") or "free",
         "plan_expires_at": user.get("plan_expires_at"),
+        "deep_credits": int(user.get("deep_credits") or 0),
     }

@@ -25,7 +25,8 @@ def build_company_brief(ctx: ScanContext) -> str:
         "",
         "## Executive summary",
         "",
-        summary.get("headline")
+        (ctx.fingerprint or {}).get("executive_brief")
+        or summary.get("headline")
         or (
             f"Scan `{ctx.scan_id}` finished with **{len(findings)}** findings "
             f"(critical={by_sev.get('critical', 0)}, high={by_sev.get('high', 0)}, "
@@ -35,6 +36,9 @@ def build_company_brief(ctx: ScanContext) -> str:
         f"**Stack:** `{summary.get('stack') or ctx.fingerprint}`",
         "",
     ]
+    owasp = (ctx.fingerprint or {}).get("owasp_attention") or []
+    if owasp:
+        lines.extend(["**OWASP themes:** " + ", ".join(owasp), ""])
     if summary.get("agents"):
         lines.extend(["## What each agent checked", ""])
         for row in summary["agents"]:

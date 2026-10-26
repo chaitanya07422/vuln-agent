@@ -70,6 +70,7 @@ class MemoryUserStore(UserStore):
             "google_id": google_id,
             "plan": "free",
             "plan_expires_at": None,
+            "deep_credits": 0,
             "created_at": _utc_now(),
         }
         self._users[uid] = user
@@ -134,6 +135,7 @@ class MongoUserStore(UserStore):
             "google_id": google_id,
             "plan": "free",
             "plan_expires_at": None,
+            "deep_credits": 0,
             "created_at": _utc_now(),
         }
         await self._col.insert_one(doc)

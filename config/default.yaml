@@ -8,13 +8,40 @@ enabled_agents:
   - js_audit
   - uat_app
   - ports_mail
+  - tls_headers
+  - cloud_storage
+  - admin_panels
+  - email_spoof
+  - js_secrets
+  - sitemap_crawl
+  - graphql
+  - websocket
+  - cookie_flags
+  - oauth_misconfig
+  - jwt_public
+  - redirect_open
+  - http_methods
+  - cors_creds
+  - subdomain_hint
+  - dns_hygiene
+  - caa_dnssec
+  - cdn_origin
+  - wordpress_deep
+  - next_react
+  - spring_java
+  - firebase
+  - cache_poison_hint
+  - rate_limit_probe
+  - dependency_meta
   - adapt
+  - compliance_map
+  - executive_brief
   - reporter
 
 limits:
-  max_rps: 5
+  max_rps: 7
   request_timeout_sec: 15
-  scan_timeout_sec: 180
+  scan_timeout_sec: 360
 
 http:
   user_agent: "vuln-agent/0.1 (+authorized-scan)"

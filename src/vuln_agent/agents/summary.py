@@ -17,7 +17,34 @@ AGENT_LABELS = {
     "upload": "Upload & file routes",
     "uat_app": "Staging / UAT links",
     "ports_mail": "Ports & mail",
+    "tls_headers": "TLS & security headers",
+    "cloud_storage": "Cloud storage exposure",
+    "admin_panels": "Admin panel surfaces",
+    "email_spoof": "Email auth (SPF/DMARC)",
+    "js_secrets": "Secrets in public JS",
+    "sitemap_crawl": "Robots & sitemap paths",
+    "graphql": "GraphQL surface",
+    "websocket": "WebSocket endpoints",
+    "cookie_flags": "Cookie security flags",
+    "oauth_misconfig": "OAuth frontend config",
+    "jwt_public": "JWKS / OIDC discovery",
+    "redirect_open": "Open redirect checks",
+    "http_methods": "HTTP method hygiene",
+    "cors_creds": "CORS + credentials",
+    "subdomain_hint": "Subdomain hints",
+    "dns_hygiene": "DNS hygiene",
+    "caa_dnssec": "CAA & DNSSEC",
+    "cdn_origin": "CDN / origin leakage",
+    "wordpress_deep": "WordPress deep checks",
+    "next_react": "Next.js / React checks",
+    "spring_java": "Spring actuator",
+    "firebase": "Firebase exposure",
+    "cache_poison_hint": "Cache poison hints",
+    "rate_limit_probe": "Rate-limit probe",
+    "dependency_meta": "Manifests & generator",
     "adapt": "Extra path probes",
+    "compliance_map": "OWASP theme map",
+    "executive_brief": "Executive brief",
     "reporter": "Report",
 }
 
@@ -158,4 +185,45 @@ def _clear_note(agent: str, fp: dict, tags: list) -> str:
         return "No risky management/DB ports exposed (80/443 only is normal)"
     if agent == "adapt":
         return "Extra probes found nothing beyond expected auth walls"
+    if agent == "tls_headers":
+        miss = fp.get("security_headers_missing") or []
+        return "Security headers reviewed" + (f" ({len(miss)} optional notes)" if miss else "")
+    if agent == "email_spoof":
+        em = fp.get("email_spoof") or {}
+        return "SPF/DMARC/DKIM DNS reviewed"
+    if agent == "js_secrets":
+        return "Public JS scanned for secret patterns"
+    if agent == "compliance_map":
+        themes = fp.get("owasp_attention") or []
+        return f"OWASP themes noted: {', '.join(themes[:3])}" if themes else "No OWASP theme hits"
+    if agent == "executive_brief":
+        return "Executive summary prepared"
+    if agent in (
+        "cloud_storage",
+        "admin_panels",
+        "sitemap_crawl",
+        "graphql",
+        "websocket",
+        "cookie_flags",
+        "oauth_misconfig",
+        "jwt_public",
+        "redirect_open",
+        "http_methods",
+        "cors_creds",
+        "subdomain_hint",
+        "dns_hygiene",
+        "caa_dnssec",
+        "cdn_origin",
+        "wordpress_deep",
+        "next_react",
+        "spring_java",
+        "firebase",
+        "cache_poison_hint",
+        "rate_limit_probe",
+        "dependency_meta",
+    ):
+        block = fp.get(agent) or {}
+        if isinstance(block, dict) and block.get("skipped"):
+            return "Not applicable for this stack"
+        return "Checked — no issues flagged"
     return "No issues flagged"

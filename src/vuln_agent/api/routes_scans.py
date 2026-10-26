@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, HttpUrl
 
+from vuln_agent.api.routes_billing import consume_deep_credit, sync_user_plan
 from vuln_agent.auth.deps import optional_user, require_user
 from vuln_agent.auth.quotas import create_limit, history_limit, is_pro
 from vuln_agent.core.errors import ScanNotFoundError
@@ -233,9 +234,21 @@ async def get_report_html(
     if scan.get("status") != "done":
         raise HTTPException(status_code=409, detail="report not ready")
     branded = False
-    if user and (user.get("id") == scan.get("owner_id") or is_pro(user)):
-        branded = is_pro(user)
-    # owners on free get watermark; pro get branded
+    if user and user.get("id") == scan.get("owner_id"):
+        try:
+            user = await sync_user_plan(request, user)
+        except Exception:
+            pass
+        if is_pro(user) or scan.get("branded_brief"):
+            branded = True
+        elif int(user.get("deep_credits") or 0) > 0:
+            # Spend one ₹50 deep-brief credit for a Pro-style branded HTML
+            await consume_deep_credit(request, user)
+            branded = True
+            try:
+                await store.update(scan_id, branded_brief=True)
+            except Exception:
+                pass
     html_doc = render_scan_html(scan, branded=branded)
     return HTMLResponse(html_doc)
 
