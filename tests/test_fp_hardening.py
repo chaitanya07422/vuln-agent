@@ -4,6 +4,8 @@ from vuln_agent.agents.cookie_flags import (
     split_set_cookie_header,
 )
 from vuln_agent.agents.redirect_open import EVIL_HOST, _is_external_nav
+from vuln_agent.agents.ssrf_hint import _same_response, _strong_accept
+from vuln_agent.agents.subdomain_hint import is_wildcard_catch_all
 
 
 def test_split_cookies_preserves_expires_comma():
@@ -43,3 +45,33 @@ def test_open_redirect_requires_external_location():
     assert _is_external_nav("", "www.naukri.com") is False
     # evil only in query of same host is NOT external nav
     assert _is_external_nav(f"https://www.naukri.com/sign-in?next=https://{EVIL_HOST}/", "www.naukri.com") is False
+
+
+def test_ssrf_ignores_next_html_metadata_boilerplate():
+    next_404 = (
+        '<!DOCTYPE html><html><head><title>404: This page could not be found.</title>'
+        "</head><body><script>self.__next_f=self.__next_f||[]</script>"
+        "<meta name='metadata' content='x'/></body></html>"
+    )
+    assert _strong_accept(next_404, probe="http://127.0.0.1/", code=404) is False
+    assert _strong_accept(next_404, probe="http://169.254.169.254/latest/meta-data/", code=404) is False
+
+
+def test_ssrf_accepts_real_connect_errors():
+    body = "Error: connect ECONNREFUSED 127.0.0.1:80"
+    assert _strong_accept(body, probe="http://127.0.0.1/", code=500) is True
+    meta = "fetch failed: getaddrinfo ENOTFOUND metadata.google.internal"
+    assert _strong_accept(meta, probe="http://metadata.google.internal/", code=502) is True
+
+
+def test_ssrf_baseline_same_response():
+    html = "404: This page could not be found. __next_f"
+    assert _same_response(404, html, 404, html) is True
+    assert _same_response(404, html, 500, "connection refused to 127.0.0.1") is False
+
+
+def test_wildcard_dns_catch_all():
+    shared = {"129.159.226.127"}
+    assert is_wildcard_catch_all(shared, shared) is True
+    assert is_wildcard_catch_all({"1.2.3.4"}, shared) is False
+    assert is_wildcard_catch_all(set(), shared) is False

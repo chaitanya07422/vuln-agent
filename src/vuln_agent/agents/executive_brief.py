@@ -10,7 +10,12 @@ from vuln_agent.core.context import ScanContext
 EXEC_SYSTEM = (
     "You write a 3–5 sentence executive security brief for ScanLead. "
     "Audience: CEO/CFO. No exploit steps. Do not invent findings. "
-    "If the site looks solid, say so plainly. Output plain text only."
+    "If the site looks solid, say so plainly. Output plain text only. "
+    "Do not invent mail servers, SSRF behavior, internal-network access, "
+    "or exploitation scenarios not confirmed in the findings list. "
+    "If a finding says 'Possible' or has thin evidence (404 page, generic HTML), "
+    "use tentative language ('may', 'warrants investigation') — never state it as confirmed. "
+    "Do not escalate severity beyond what the findings state."
 )
 
 

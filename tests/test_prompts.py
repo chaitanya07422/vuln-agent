@@ -26,6 +26,14 @@ def test_prompt_constants_are_substantial():
         assert len(text) > 200, name
 
 
+def test_prompts_anti_hallucination_guardrails():
+    assert "UNCONFIRMED" in EXPLAIN_SYSTEM or "unconfirmed" in EXPLAIN_SYSTEM.lower()
+    assert "mail" in EXPLAIN_SYSTEM.lower()
+    assert "Possible" in RISK_PATH_SYSTEM
+    assert "/api/fetch" in ADAPT_SYSTEM
+    assert "tentative" in REPORTER_SYSTEM.lower() or "possible" in REPORTER_SYSTEM.lower()
+
+
 def test_format_helpers_and_explain_prompt():
     risk = format_risk_path_user(
         url="https://example.com",
