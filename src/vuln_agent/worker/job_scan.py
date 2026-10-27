@@ -76,4 +76,4 @@ class WorkerSettings:
     redis_settings = _redis_settings()
     max_jobs = 10
     job_timeout = _JOB_TIMEOUT_SEC
-    on_startup = [_sweep_stale]
+    on_startup = _sweep_stale
