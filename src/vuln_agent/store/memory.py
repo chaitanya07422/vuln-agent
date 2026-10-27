@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from vuln_agent.core.errors import ScanNotFoundError
@@ -47,3 +48,19 @@ class MemoryScanStore:
     async def count_by_owner(self, owner_id: str) -> int:
         async with self._lock:
             return sum(1 for s in self._scans.values() if s.get("owner_id") == owner_id)
+
+    async def fail_stale_running(self, older_than_sec: float = 960.0) -> int:
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_sec)).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        n = 0
+        async with self._lock:
+            for scan in self._scans.values():
+                if scan.get("status") not in ("queued", "running"):
+                    continue
+                if (scan.get("created_at") or "") >= cutoff:
+                    continue
+                scan["status"] = "failed"
+                scan["finished_at"] = now
+                scan["error"] = "TimeoutError: stale scan sweeper (worker orphan)"
+                n += 1
+        return n

@@ -162,6 +162,11 @@ class LeadRunner:
             llm=self.llm,
         )
 
+        async def _persist_partial(**fields: Any) -> None:
+            await self.store.update(scan_id, **fields)
+
+        ctx.persist_partial = _persist_partial
+
         async def _mark(agent_name: str, status: str) -> None:
             nonlocal progress
             async with progress_lock:

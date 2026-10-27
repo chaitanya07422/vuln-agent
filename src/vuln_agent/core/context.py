@@ -38,6 +38,8 @@ class ScanContext:
     summary: Optional[Dict[str, Any]] = None
     emit: Optional[Callable[[Finding], Awaitable[None]]] = None
     record_audit: Optional[Callable[..., Awaitable[None]]] = None
+    # Persist partial report/findings mid-scan (e.g. template brief before LLM polish).
+    persist_partial: Optional[Callable[..., Awaitable[None]]] = None
 
     async def emit_finding(self, finding: Finding) -> None:
         self.findings.append(finding)
@@ -48,3 +50,7 @@ class ScanContext:
         self.audit.append(payload)
         if self.record_audit:
             await self.record_audit(**payload)
+
+    async def save_partial(self, **fields: Any) -> None:
+        if self.persist_partial:
+            await self.persist_partial(**fields)

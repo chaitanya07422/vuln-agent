@@ -13,16 +13,34 @@ from vuln_agent.store.mongo import build_store
 
 # Real scans often take 4–6+ min (reporter LLM). ARQ default is 300s.
 _JOB_TIMEOUT_SEC = 900
+# Sweep orphans a bit after the job timeout so live jobs aren't killed early.
+_STALE_AFTER_SEC = float(_JOB_TIMEOUT_SEC + 60)
 
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+async def _sweep_stale(ctx) -> None:
+    """On worker boot / before jobs: close orphan running scans left by crashes."""
+    try:
+        settings = Settings.load()
+        store = build_store(settings.mongo_uri)
+        n = await store.fail_stale_running(_STALE_AFTER_SEC)
+        if n:
+            print(f"sweeper: marked {n} stale scan(s) failed", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"sweeper: skipped ({type(exc).__name__}: {exc})", flush=True)
+
+
 async def run_scan_job(ctx, scan_id: str, url: str, host: str, scheme: str) -> None:
     """ARQ job: rebuild LeadRunner with shared Mongo store and run the scan."""
     settings = Settings.load()
     store = build_store(settings.mongo_uri)
+    try:
+        await store.fail_stale_running(_STALE_AFTER_SEC)
+    except Exception:
+        pass
     playbooks = default_playbook_store(settings.config)
     llm = build_llm_router(settings.llm)
     lead = LeadRunner(settings, store, playbooks=playbooks, llm=llm)
@@ -58,3 +76,4 @@ class WorkerSettings:
     redis_settings = _redis_settings()
     max_jobs = 10
     job_timeout = _JOB_TIMEOUT_SEC
+    on_startup = [_sweep_stale]

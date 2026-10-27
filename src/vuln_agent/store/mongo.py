@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from vuln_agent.core.errors import ScanNotFoundError
@@ -52,6 +53,25 @@ class MongoScanStore:
 
     async def count_by_owner(self, owner_id: str) -> int:
         return int(await self._col.count_documents({"owner_id": owner_id}))
+
+    async def fail_stale_running(self, older_than_sec: float = 960.0) -> int:
+        """Mark orphan queued/running scans failed (worker died / job timed out)."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_sec)).isoformat()
+        now = datetime.now(timezone.utc).isoformat()
+        res = await self._col.update_many(
+            {
+                "status": {"$in": ["queued", "running"]},
+                "created_at": {"$lt": cutoff},
+            },
+            {
+                "$set": {
+                    "status": "failed",
+                    "finished_at": now,
+                    "error": "TimeoutError: stale scan sweeper (worker orphan)",
+                }
+            },
+        )
+        return int(res.modified_count or 0)
 
 
 def build_store(mongo_uri: Optional[str]):

@@ -154,6 +154,18 @@ class ReporterAgent(BaseAgent):
             ctx.risk_path = await build_risk_path(ctx)
 
         brief = build_company_brief(ctx)
+        # Publish template brief immediately so UI can show a draft while LLM polishes.
+        ctx.report_md = brief
+        findings_dump = [f.model_dump() if isinstance(f, Finding) else f for f in ctx.findings]
+        try:
+            await ctx.save_partial(
+                report_md=brief,
+                summary=ctx.summary,
+                risk_path=ctx.risk_path,
+                findings=findings_dump,
+            )
+        except Exception:
+            pass
 
         role = None
         if ctx.llm:
