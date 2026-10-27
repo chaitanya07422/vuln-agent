@@ -10,13 +10,16 @@ from pydantic import BaseModel, Field, HttpUrl
 from vuln_agent.api.routes_billing import consume_deep_credit, sync_user_plan
 from vuln_agent.auth.deps import effective_plan, optional_user, require_user
 from vuln_agent.auth.quotas import (
+    FREE_FULL_LIMIT,
     FREE_SCAN_LIMIT,
+    GUEST_FULL_LIMIT,
     GUEST_LIFETIME_LIMIT,
     create_limit,
     history_limit,
     is_pro,
     quota_payload,
 )
+from vuln_agent.auth.reveal import apply_reveal, choose_detail_level, teaser_report_md
 from vuln_agent.core.errors import ScanNotFoundError
 from vuln_agent.core.html_report import render_scan_html
 from vuln_agent.core.scan_diff import diff_findings
@@ -61,10 +64,18 @@ class ScanSummary(BaseModel):
     owner_id: Optional[str] = None
     claim_token: Optional[str] = None
     parent_scan_id: Optional[str] = None
+    detail_level: Optional[str] = None
+    hidden_findings: Optional[int] = None
+    findings_total: Optional[int] = None
 
 
-def _public_scan(scan: Dict[str, Any], *, include_claim: bool = False) -> Dict[str, Any]:
-    out = dict(scan)
+def _public_scan(
+    scan: Dict[str, Any],
+    *,
+    include_claim: bool = False,
+    viewer: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    out = apply_reveal(dict(scan), viewer=viewer)
     if not include_claim:
         out.pop("claim_token", None)
     # never expose full audit in list/summary responses unless requested
@@ -110,18 +121,26 @@ def _cookie_secure(request: Request) -> bool:
 def _free_exhausted_detail() -> Dict[str, Any]:
     return {
         "code": "FREE_QUOTA_EXCEEDED",
-        "message": f"Free plan includes {FREE_SCAN_LIMIT} scans. Upgrade to Pro or buy a ₹60 deep brief.",
+        "message": (
+            f"Free includes {FREE_FULL_LIMIT} full briefs "
+            f"(up to {FREE_SCAN_LIMIT} teaser scans). Upgrade to Pro or buy a ₹60 deep brief."
+        ),
         "upgrade": {"pro": True, "deep": True},
         "limit": FREE_SCAN_LIMIT,
+        "full_limit": FREE_FULL_LIMIT,
     }
 
 
 def _guest_exhausted_detail() -> Dict[str, Any]:
     return {
         "code": "GUEST_QUOTA_EXCEEDED",
-        "message": f"You used your {GUEST_LIFETIME_LIMIT} free guest scans. Sign in for {FREE_SCAN_LIMIT} more on Free.",
+        "message": (
+            f"You used your {GUEST_LIFETIME_LIMIT} guest scans "
+            f"(1 full + 1 preview). Sign in for {FREE_FULL_LIMIT} full Free briefs."
+        ),
         "upgrade": {"signin": True},
         "limit": GUEST_LIFETIME_LIMIT,
+        "full_limit": GUEST_FULL_LIMIT,
     }
 
 
@@ -140,20 +159,35 @@ async def get_quota(
         plan = effective_plan(user)
         used = await store.count_by_owner(user["id"])
         limit = create_limit(user)
-        payload = quota_payload(
+        if plan == "pro":
+            return quota_payload(
+                mode=plan,
+                limit=limit,
+                used=used,
+                deep_credits=int(user.get("deep_credits") or 0),
+            )
+        return quota_payload(
             mode=plan,
             limit=limit,
             used=used,
             deep_credits=int(user.get("deep_credits") or 0),
+            full_limit=FREE_FULL_LIMIT,
+            full_used=min(used, FREE_FULL_LIMIT),
         )
-        return payload
 
     guest_id = _guest_id(request)
     if not request.cookies.get(GUEST_COOKIE):
         _set_guest_cookie(response, guest_id, secure=_cookie_secure(request))
     ip = _client_ip(request)
     used = await request.app.state.guest_quota.effective_used(guest_id, ip or None)
-    return quota_payload(mode="guest", limit=GUEST_LIFETIME_LIMIT, used=used, deep_credits=0)
+    return quota_payload(
+        mode="guest",
+        limit=GUEST_LIFETIME_LIMIT,
+        used=used,
+        deep_credits=0,
+        full_limit=GUEST_FULL_LIMIT,
+        full_used=min(used, GUEST_FULL_LIMIT),
+    )
 
 
 @router.post("", response_model=ScanSummary, status_code=202)
@@ -166,7 +200,12 @@ async def create_scan(
     lead = request.app.state.lead
     store = request.app.state.store
     owner_id = user["id"] if user else None
+    detail_level = "full"
     if user:
+        try:
+            user = await sync_user_plan(request, user)
+        except Exception:
+            pass
         count = await store.count_by_owner(owner_id)
         limit = create_limit(user)
         if count >= limit:
@@ -176,12 +215,22 @@ async def create_scan(
                     detail=f"Create quota reached ({limit}). Contact support or wait.",
                 )
             raise HTTPException(status_code=402, detail=_free_exhausted_detail())
+        detail_level = choose_detail_level(
+            plan=effective_plan(user),
+            owner_scan_count=count,
+            free_full_limit=FREE_FULL_LIMIT,
+        )
     else:
         guest_id = _guest_id(request)
         ip = _client_ip(request)
         used = await request.app.state.guest_quota.effective_used(guest_id, ip or None)
         if used >= GUEST_LIFETIME_LIMIT:
             raise HTTPException(status_code=401, detail=_guest_exhausted_detail())
+        detail_level = choose_detail_level(
+            plan="guest",
+            guest_used_before=used,
+            guest_full_limit=GUEST_FULL_LIMIT,
+        )
         await request.app.state.guest_quota.consume(guest_id, ip or None)
         _set_guest_cookie(response, guest_id, secure=_cookie_secure(request))
 
@@ -193,7 +242,8 @@ async def create_scan(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _public_scan(record, include_claim=True)
+    record = await store.update(record["id"], detail_level=detail_level)
+    return _public_scan(record, include_claim=True, viewer=user)
 
 
 @router.get("")
@@ -221,13 +271,22 @@ async def list_scans(
 
 
 @router.get("/{scan_id}", response_model=ScanSummary)
-async def get_scan(scan_id: str, request: Request) -> Dict[str, Any]:
+async def get_scan(
+    scan_id: str,
+    request: Request,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> Dict[str, Any]:
     store = request.app.state.store
     try:
         scan = await store.get(scan_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=404, detail="scan not found") from exc
-    return _public_scan(scan)
+    if user:
+        try:
+            user = await sync_user_plan(request, user)
+        except Exception:
+            pass
+    return _public_scan(scan, viewer=user)
 
 
 @router.post("/{scan_id}/claim", response_model=ScanSummary)
@@ -245,7 +304,7 @@ async def claim_scan(
     if scan.get("owner_id") and scan.get("owner_id") != user["id"]:
         raise HTTPException(status_code=403, detail="scan owned by another user")
     if scan.get("owner_id") == user["id"]:
-        return _public_scan(scan)
+        return _public_scan(scan, viewer=user)
     if not scan.get("claim_token") or scan.get("claim_token") != body.claim_token:
         raise HTTPException(status_code=403, detail="invalid claim token")
     count = await store.count_by_owner(user["id"])
@@ -257,7 +316,7 @@ async def claim_scan(
             )
         raise HTTPException(status_code=402, detail=_free_exhausted_detail())
     updated = await store.update(scan_id, owner_id=user["id"], claim_token=None)
-    return _public_scan(updated)
+    return _public_scan(updated, viewer=user)
 
 
 @router.post("/{scan_id}/rescan", status_code=202)
@@ -280,13 +339,19 @@ async def rescan(
         if is_pro(user):
             raise HTTPException(status_code=429, detail=f"Create quota reached ({limit}).")
         raise HTTPException(status_code=402, detail=_free_exhausted_detail())
+    detail_level = choose_detail_level(
+        plan=effective_plan(user),
+        owner_scan_count=count,
+        free_full_limit=FREE_FULL_LIMIT,
+    )
     record = await lead.start_scan(
         url=previous["url"],
         attested=True,
         owner_id=user["id"],
         parent_scan_id=scan_id,
     )
-    return _public_scan(record, include_claim=True)
+    record = await store.update(record["id"], detail_level=detail_level)
+    return _public_scan(record, include_claim=True, viewer=user)
 
 
 @router.get("/{scan_id}/diff/{other_id}")
@@ -314,12 +379,24 @@ async def scan_diff(
 
 
 @router.get("/{scan_id}/report.md")
-async def get_report(scan_id: str, request: Request) -> PlainTextResponse:
+async def get_report(
+    scan_id: str,
+    request: Request,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> PlainTextResponse:
     store = request.app.state.store
     try:
         scan = await store.get(scan_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=404, detail="scan not found") from exc
+    if user:
+        try:
+            user = await sync_user_plan(request, user)
+        except Exception:
+            pass
+    revealed = apply_reveal(scan, viewer=user)
+    if revealed.get("detail_level") == "teaser":
+        return PlainTextResponse(teaser_report_md(revealed), media_type="text/markdown")
     md = scan.get("report_md")
     if not md:
         raise HTTPException(status_code=409, detail="report not ready")
@@ -348,22 +425,44 @@ async def get_report_html(
         if is_pro(user) or scan.get("branded_brief"):
             branded = True
         elif int(user.get("deep_credits") or 0) > 0:
-            # Spend one ₹50 deep-brief credit for a Pro-style branded HTML
+            # Spend one deep-brief credit for a Pro-style branded HTML
             await consume_deep_credit(request, user)
             branded = True
             try:
                 await store.update(scan_id, branded_brief=True)
             except Exception:
                 pass
+    revealed = apply_reveal(scan, viewer=user)
+    if revealed.get("detail_level") == "teaser" and not branded:
+        revealed["report_md"] = teaser_report_md(revealed)
+        html_doc = render_scan_html(revealed, branded=False)
+        return HTMLResponse(html_doc)
     html_doc = render_scan_html(scan, branded=branded)
     return HTMLResponse(html_doc)
 
 
 @router.get("/{scan_id}/audit.json")
-async def get_audit(scan_id: str, request: Request) -> Dict[str, Any]:
+async def get_audit(
+    scan_id: str,
+    request: Request,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> Dict[str, Any]:
     store = request.app.state.store
     try:
         scan = await store.get(scan_id)
     except ScanNotFoundError as exc:
         raise HTTPException(status_code=404, detail="scan not found") from exc
+    if user:
+        try:
+            user = await sync_user_plan(request, user)
+        except Exception:
+            pass
+    revealed = apply_reveal(scan, viewer=user)
+    if revealed.get("detail_level") == "teaser":
+        return {
+            "id": scan_id,
+            "audit": [],
+            "detail_level": "teaser",
+            "message": "Audit log locked on preview scans. Upgrade to Pro to unlock.",
+        }
     return {"id": scan_id, "audit": scan.get("audit") or []}
