@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from vuln_agent.api.routes_api_keys import router as api_keys_router
 from vuln_agent.api.routes_auth import router as auth_router
 from vuln_agent.api.routes_billing import router as billing_router
 from vuln_agent.api.routes_scans import router as scans_router
@@ -60,6 +61,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(auth_router)
     app.include_router(billing_router)
+    app.include_router(api_keys_router)
     app.include_router(scans_router)
 
     web_dir = Path(__file__).resolve().parent / "web"

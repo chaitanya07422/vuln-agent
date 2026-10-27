@@ -32,12 +32,16 @@ class UserStore:
     async def update(self, user_id: str, **fields: Any) -> Dict[str, Any]:
         raise NotImplementedError
 
+    async def find_by_api_key_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError
+
 
 class MemoryUserStore(UserStore):
     def __init__(self) -> None:
         self._users: Dict[str, Dict[str, Any]] = {}
         self._by_google: Dict[str, str] = {}
         self._by_email: Dict[str, str] = {}
+        self._by_api_hash: Dict[str, str] = {}
 
     async def upsert_google(
         self,
@@ -71,6 +75,7 @@ class MemoryUserStore(UserStore):
             "plan": "free",
             "plan_expires_at": None,
             "deep_credits": 0,
+            "api_keys": [],
             "created_at": _utc_now(),
         }
         self._users[uid] = user
@@ -89,8 +94,31 @@ class MemoryUserStore(UserStore):
     async def update(self, user_id: str, **fields: Any) -> Dict[str, Any]:
         if user_id not in self._users:
             raise KeyError(user_id)
+        prev = self._users[user_id]
+        # Keep api key hash index in sync when api_keys replaced
+        if "api_keys" in fields:
+            for entry in prev.get("api_keys") or []:
+                h = entry.get("hash")
+                if h and self._by_api_hash.get(h) == user_id:
+                    self._by_api_hash.pop(h, None)
+            for entry in fields.get("api_keys") or []:
+                h = entry.get("hash")
+                if h:
+                    self._by_api_hash[h] = user_id
         self._users[user_id].update(fields)
         return deepcopy(self._users[user_id])
+
+    async def find_by_api_key_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        uid = self._by_api_hash.get(key_hash)
+        if uid:
+            return await self.get(uid)
+        # Fallback scan (older in-memory users)
+        for user in self._users.values():
+            for entry in user.get("api_keys") or []:
+                if entry.get("hash") == key_hash:
+                    self._by_api_hash[key_hash] = user["id"]
+                    return deepcopy(user)
+        return None
 
 
 class MongoUserStore(UserStore):
@@ -136,6 +164,7 @@ class MongoUserStore(UserStore):
             "plan": "free",
             "plan_expires_at": None,
             "deep_credits": 0,
+            "api_keys": [],
             "created_at": _utc_now(),
         }
         await self._col.insert_one(doc)
@@ -160,6 +189,9 @@ class MongoUserStore(UserStore):
         if not res:
             raise KeyError(user_id)
         return res
+
+    async def find_by_api_key_hash(self, key_hash: str) -> Optional[Dict[str, Any]]:
+        return await self._col.find_one({"api_keys.hash": key_hash}, {"_id": 0})
 
 
 def build_user_store(mongo_uri: Optional[str]) -> UserStore:

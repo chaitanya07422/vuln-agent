@@ -8,15 +8,25 @@ from fastapi.responses import HTMLResponse, PlainTextResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 from vuln_agent.api.routes_billing import consume_deep_credit, sync_user_plan
-from vuln_agent.auth.deps import effective_plan, optional_user, require_user
+from vuln_agent.auth.deps import (
+    effective_plan,
+    optional_user,
+    request_scan_source,
+    require_user,
+)
 from vuln_agent.auth.quotas import (
     FREE_FULL_LIMIT,
+    FREE_MCP_SCAN_LIMIT,
     FREE_SCAN_LIMIT,
     GUEST_FULL_LIMIT,
     GUEST_LIFETIME_LIMIT,
+    PRO_SCAN_LIMIT,
+    SCAN_SOURCE_MCP,
+    SCAN_SOURCE_WEB,
     create_limit,
     history_limit,
     is_pro,
+    pro_shares_quota,
     quota_payload,
 )
 from vuln_agent.auth.reveal import apply_reveal, choose_detail_level, teaser_report_md
@@ -125,11 +135,30 @@ def _free_exhausted_detail() -> Dict[str, Any]:
         "code": "FREE_QUOTA_EXCEEDED",
         "message": (
             f"Free includes {FREE_FULL_LIMIT} full briefs "
-            f"(up to {FREE_SCAN_LIMIT} teaser scans). Upgrade to Pro or buy a ₹60 deep brief."
+            f"(up to {FREE_SCAN_LIMIT} web scans). Upgrade to Pro or buy a ₹60 deep brief."
         ),
         "upgrade": {"pro": True, "deep": True},
         "limit": FREE_SCAN_LIMIT,
         "full_limit": FREE_FULL_LIMIT,
+    }
+
+
+def _mcp_exhausted_detail(*, plan: str) -> Dict[str, Any]:
+    if plan == "pro":
+        return {
+            "code": "MCP_QUOTA_EXCEEDED",
+            "message": f"MCP create quota reached. Contact support or wait.",
+            "upgrade": {"pro": True},
+            "limit": create_limit({"plan": "pro"}, source=SCAN_SOURCE_MCP),
+        }
+    return {
+        "code": "MCP_QUOTA_EXCEEDED",
+        "message": (
+            f"Free includes {FREE_MCP_SCAN_LIMIT} MCP scan. "
+            "Upgrade to Pro for a higher MCP quota (web Free scans are separate)."
+        ),
+        "upgrade": {"pro": True},
+        "limit": FREE_MCP_SCAN_LIMIT,
     }
 
 
@@ -159,23 +188,72 @@ async def get_quota(
         except Exception:
             pass
         plan = effective_plan(user)
-        used = await store.count_by_owner(user["id"])
-        limit = create_limit(user)
-        if plan == "pro":
-            return quota_payload(
+        channel = request_scan_source(request)
+        web_used = await store.count_by_owner(user["id"], source=SCAN_SOURCE_WEB)
+        mcp_used = await store.count_by_owner(user["id"], source=SCAN_SOURCE_MCP)
+        total_used = web_used + mcp_used
+        if pro_shares_quota(user):
+            # Pro: one shared pool — web and MCP both increment the same counter.
+            limit = PRO_SCAN_LIMIT
+            used = total_used
+            remaining = max(0, limit - used)
+            can = remaining > 0
+            payload = quota_payload(
                 mode=plan,
                 limit=limit,
                 used=used,
                 deep_credits=int(user.get("deep_credits") or 0),
             )
-        return quota_payload(
+            payload["channel"] = channel
+            payload["shared"] = True
+            payload["web"] = {
+                "limit": limit,
+                "used": web_used,
+                "remaining": remaining,
+                "can_scan": can,
+            }
+            payload["mcp"] = {
+                "limit": limit,
+                "used": mcp_used,
+                "remaining": remaining,
+                "can_scan": can,
+            }
+            return payload
+
+        web_limit = create_limit(user, source=SCAN_SOURCE_WEB)
+        mcp_limit = create_limit(user, source=SCAN_SOURCE_MCP)
+        used = web_used if channel == SCAN_SOURCE_WEB else mcp_used
+        limit = web_limit if channel == SCAN_SOURCE_WEB else mcp_limit
+        payload = quota_payload(
             mode=plan,
             limit=limit,
             used=used,
             deep_credits=int(user.get("deep_credits") or 0),
-            full_limit=FREE_FULL_LIMIT,
-            full_used=min(used, FREE_FULL_LIMIT),
+            full_limit=FREE_FULL_LIMIT if channel == SCAN_SOURCE_WEB else mcp_limit,
+            full_used=min(web_used, FREE_FULL_LIMIT)
+            if channel == SCAN_SOURCE_WEB
+            else mcp_used,
         )
+        payload["channel"] = channel
+        payload["shared"] = False
+        payload["web"] = {
+            "limit": web_limit,
+            "used": web_used,
+            "remaining": max(0, web_limit - web_used),
+            "can_scan": web_used < web_limit,
+        }
+        payload["mcp"] = {
+            "limit": mcp_limit,
+            "used": mcp_used,
+            "remaining": max(0, mcp_limit - mcp_used),
+            "can_scan": mcp_used < mcp_limit,
+        }
+        # Top-level can_scan follows the auth channel (JWT→web, API key→mcp)
+        payload["can_scan"] = payload[channel]["can_scan"]
+        payload["remaining"] = payload[channel]["remaining"]
+        payload["used"] = used
+        payload["limit"] = limit
+        return payload
 
     guest_id = _guest_id(request)
     if not request.cookies.get(GUEST_COOKIE):
@@ -203,25 +281,39 @@ async def create_scan(
     store = request.app.state.store
     owner_id = user["id"] if user else None
     detail_level = "full"
+    source = request_scan_source(request) if user else SCAN_SOURCE_WEB
     if user:
         try:
             user = await sync_user_plan(request, user)
         except Exception:
             pass
-        count = await store.count_by_owner(owner_id)
-        limit = create_limit(user)
+        if pro_shares_quota(user):
+            count = await store.count_by_owner(owner_id)  # web + mcp
+            limit = PRO_SCAN_LIMIT
+        else:
+            count = await store.count_by_owner(owner_id, source=source)
+            limit = create_limit(user, source=source)
         if count >= limit:
             if is_pro(user):
                 raise HTTPException(
                     status_code=429,
                     detail=f"Create quota reached ({limit}). Contact support or wait.",
                 )
+            if source == SCAN_SOURCE_MCP:
+                raise HTTPException(
+                    status_code=402,
+                    detail=_mcp_exhausted_detail(plan=effective_plan(user)),
+                )
             raise HTTPException(status_code=402, detail=_free_exhausted_detail())
-        detail_level = choose_detail_level(
-            plan=effective_plan(user),
-            owner_scan_count=count,
-            free_full_limit=FREE_FULL_LIMIT,
-        )
+        # Web keeps freemium full/teaser; Free MCP / Pro scans are full detail.
+        if source == SCAN_SOURCE_MCP or is_pro(user):
+            detail_level = "full"
+        else:
+            detail_level = choose_detail_level(
+                plan=effective_plan(user),
+                owner_scan_count=count,
+                free_full_limit=FREE_FULL_LIMIT,
+            )
     else:
         guest_id = _guest_id(request)
         ip = _client_ip(request)
@@ -244,7 +336,7 @@ async def create_scan(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    record = await store.update(record["id"], detail_level=detail_level)
+    record = await store.update(record["id"], detail_level=detail_level, source=source)
     return _public_scan(record, include_claim=True, viewer=user)
 
 
@@ -361,16 +453,26 @@ async def rescan(
         raise HTTPException(status_code=404, detail="scan not found") from exc
     if previous.get("owner_id") != user["id"]:
         raise HTTPException(status_code=403, detail="only owner can rescan")
-    count = await store.count_by_owner(user["id"])
-    limit = create_limit(user)
+    # Rescan is tagged web; Pro still counts against the shared pool.
+    source = SCAN_SOURCE_WEB
+    if pro_shares_quota(user):
+        count = await store.count_by_owner(user["id"])
+        limit = PRO_SCAN_LIMIT
+    else:
+        count = await store.count_by_owner(user["id"], source=source)
+        limit = create_limit(user, source=source)
     if count >= limit:
         if is_pro(user):
             raise HTTPException(status_code=429, detail=f"Create quota reached ({limit}).")
         raise HTTPException(status_code=402, detail=_free_exhausted_detail())
-    detail_level = choose_detail_level(
-        plan=effective_plan(user),
-        owner_scan_count=count,
-        free_full_limit=FREE_FULL_LIMIT,
+    detail_level = (
+        "full"
+        if is_pro(user)
+        else choose_detail_level(
+            plan=effective_plan(user),
+            owner_scan_count=count,
+            free_full_limit=FREE_FULL_LIMIT,
+        )
     )
     record = await lead.start_scan(
         url=previous["url"],
@@ -378,7 +480,7 @@ async def rescan(
         owner_id=user["id"],
         parent_scan_id=scan_id,
     )
-    record = await store.update(record["id"], detail_level=detail_level)
+    record = await store.update(record["id"], detail_level=detail_level, source=source)
     return _public_scan(record, include_claim=True, viewer=user)
 
 

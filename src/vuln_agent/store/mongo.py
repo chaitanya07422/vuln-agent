@@ -51,8 +51,18 @@ class MongoScanStore:
         )
         return [doc async for doc in cursor]
 
-    async def count_by_owner(self, owner_id: str) -> int:
-        return int(await self._col.count_documents({"owner_id": owner_id}))
+    async def count_by_owner(self, owner_id: str, *, source: Optional[str] = None) -> int:
+        if source is None:
+            return int(await self._col.count_documents({"owner_id": owner_id}))
+        # Untagged legacy rows count as web
+        if source == "web":
+            query: Dict[str, Any] = {
+                "owner_id": owner_id,
+                "$or": [{"source": "web"}, {"source": {"$exists": False}}, {"source": None}],
+            }
+        else:
+            query = {"owner_id": owner_id, "source": source}
+        return int(await self._col.count_documents(query))
 
     async def fail_stale_running(self, older_than_sec: float = 960.0) -> int:
         """Mark orphan queued/running scans failed (worker died / job timed out)."""

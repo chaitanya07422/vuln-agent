@@ -1,10 +1,12 @@
 from vuln_agent.auth.guest_quota import MemoryGuestQuotaStore
 from vuln_agent.auth.quotas import (
     FREE_FULL_LIMIT,
+    FREE_MCP_SCAN_LIMIT,
     FREE_SCAN_LIMIT,
     GUEST_FULL_LIMIT,
     GUEST_LIFETIME_LIMIT,
     PRO_SCAN_LIMIT,
+    SCAN_SOURCE_MCP,
     create_limit,
     history_limit,
     quota_payload,
@@ -16,12 +18,15 @@ def test_limits():
     assert GUEST_LIFETIME_LIMIT == 2
     assert GUEST_FULL_LIMIT == 1
     assert FREE_FULL_LIMIT == 2
-    assert FREE_SCAN_LIMIT == 10
+    assert FREE_SCAN_LIMIT == 5
+    assert FREE_MCP_SCAN_LIMIT == 1
     assert PRO_SCAN_LIMIT == 30
     assert create_limit(None) == 2
-    assert create_limit({"plan": "free"}) == 10
+    assert create_limit({"plan": "free"}) == 5
+    assert create_limit({"plan": "free"}, source=SCAN_SOURCE_MCP) == 1
     assert create_limit({"plan": "pro"}) == 30
-    assert history_limit({"plan": "free"}) == 10
+    assert create_limit({"plan": "pro"}, source=SCAN_SOURCE_MCP) == 30  # shared Pro pool
+    assert history_limit({"plan": "free"}) == 6
     assert history_limit({"plan": "pro"}) == 30
 
 

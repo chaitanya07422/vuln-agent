@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "scanlead": {
+      "command": "scanlead-mcp",
+      "env": {
+        "SCANLEAD_API_URL": "https://vulscan.duckdns.org",
+        "SCANLEAD_API_KEY": "sl_live_REPLACE_ME"
+      }
+    }
+  }
+}

@@ -45,9 +45,20 @@ class MemoryScanStore:
             items.sort(key=lambda s: s.get("created_at") or "", reverse=True)
             return [deepcopy(s) for s in items[:limit]]
 
-    async def count_by_owner(self, owner_id: str) -> int:
+    async def count_by_owner(self, owner_id: str, *, source: Optional[str] = None) -> int:
         async with self._lock:
-            return sum(1 for s in self._scans.values() if s.get("owner_id") == owner_id)
+            n = 0
+            for s in self._scans.values():
+                if s.get("owner_id") != owner_id:
+                    continue
+                if source is None:
+                    n += 1
+                    continue
+                # Untagged legacy rows count as web
+                row_source = s.get("source") or "web"
+                if row_source == source:
+                    n += 1
+            return n
 
     async def fail_stale_running(self, older_than_sec: float = 960.0) -> int:
         cutoff = (datetime.now(timezone.utc) - timedelta(seconds=older_than_sec)).isoformat()

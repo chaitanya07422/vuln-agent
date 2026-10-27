@@ -20,27 +20,55 @@ def _int_env(name: str, default: int) -> int:
 GUEST_LIFETIME_LIMIT = _int_env("VULN_AGENT_GUEST_LIFETIME_LIMIT", 2)
 # First guest scan is full detail; second is teaser (1 finding)
 GUEST_FULL_LIMIT = _int_env("VULN_AGENT_GUEST_FULL_LIMIT", 1)
-# Signed-in Free: first N owned scans get full detail
+# Signed-in Free: first N *web* scans get full detail
 FREE_FULL_LIMIT = _int_env("VULN_AGENT_FREE_FULL_LIMIT", 2)
-# Free can keep creating beyond full allotment (teaser results)
-FREE_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_SCAN_LIMIT", 10)
+# Free web create cap (MCP is a separate bucket)
+FREE_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_SCAN_LIMIT", 5)
+# Free MCP / CLI create cap (API key auth) — independent of web
+FREE_MCP_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_MCP_SCAN_LIMIT", 1)
 # Pro create + history caps (override on Oracle via env)
 PRO_SCAN_LIMIT = _int_env("VULN_AGENT_PRO_SCAN_LIMIT", 30)
 
-HISTORY_LIMITS = {"free": FREE_SCAN_LIMIT, "pro": PRO_SCAN_LIMIT, "anon": 0}
+SCAN_SOURCE_WEB = "web"
+SCAN_SOURCE_MCP = "mcp"
+
+HISTORY_LIMITS = {
+    "free": FREE_SCAN_LIMIT + FREE_MCP_SCAN_LIMIT,
+    "pro": PRO_SCAN_LIMIT,
+    "anon": 0,
+}
 CREATE_LIMITS = {"free": FREE_SCAN_LIMIT, "pro": PRO_SCAN_LIMIT, "anon": GUEST_LIFETIME_LIMIT}
 
 
 def history_limit(user: Optional[Dict[str, Any]]) -> int:
-    return HISTORY_LIMITS.get(effective_plan(user), FREE_SCAN_LIMIT)
+    return HISTORY_LIMITS.get(effective_plan(user), FREE_SCAN_LIMIT + FREE_MCP_SCAN_LIMIT)
 
 
-def create_limit(user: Optional[Dict[str, Any]]) -> int:
-    return CREATE_LIMITS.get(effective_plan(user), FREE_SCAN_LIMIT)
+def create_limit(user: Optional[Dict[str, Any]], *, source: str = SCAN_SOURCE_WEB) -> int:
+    plan = effective_plan(user)
+    # Pro: one shared pool for web + MCP (source ignored).
+    if plan == "pro":
+        return PRO_SCAN_LIMIT
+    if source == SCAN_SOURCE_MCP:
+        if plan == "free":
+            return FREE_MCP_SCAN_LIMIT
+        return 0
+    return CREATE_LIMITS.get(plan, FREE_SCAN_LIMIT)
+
+
+def normalize_scan_source(source: Optional[str]) -> str:
+    if source == SCAN_SOURCE_MCP:
+        return SCAN_SOURCE_MCP
+    return SCAN_SOURCE_WEB
 
 
 def is_pro(user: Optional[Dict[str, Any]]) -> bool:
     return effective_plan(user) == "pro"
+
+
+def pro_shares_quota(user: Optional[Dict[str, Any]]) -> bool:
+    """Pro web + MCP scans share one PRO_SCAN_LIMIT counter."""
+    return is_pro(user)
 
 
 def quota_payload(
