@@ -4,6 +4,7 @@ from vuln_agent.auth.quotas import (
     FREE_SCAN_LIMIT,
     GUEST_FULL_LIMIT,
     GUEST_LIFETIME_LIMIT,
+    PRO_SCAN_LIMIT,
     create_limit,
     history_limit,
     quota_payload,
@@ -16,10 +17,21 @@ def test_limits():
     assert GUEST_FULL_LIMIT == 1
     assert FREE_FULL_LIMIT == 2
     assert FREE_SCAN_LIMIT == 10
+    assert PRO_SCAN_LIMIT == 20
     assert create_limit(None) == 2
     assert create_limit({"plan": "free"}) == 10
-    assert create_limit({"plan": "pro"}) == 500
+    assert create_limit({"plan": "pro"}) == 20
     assert history_limit({"plan": "free"}) == 10
+    assert history_limit({"plan": "pro"}) == 20
+
+
+def test_pro_can_scan_respects_limit():
+    p = quota_payload(mode="pro", limit=20, used=20)
+    assert p["remaining"] == 0
+    assert p["can_scan"] is False
+    p2 = quota_payload(mode="pro", limit=20, used=5)
+    assert p2["can_scan"] is True
+    assert p2["remaining"] == 15
 
 
 def test_choose_detail_level():

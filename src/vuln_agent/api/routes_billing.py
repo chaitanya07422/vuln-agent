@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from vuln_agent.auth.deps import effective_plan, require_user
-from vuln_agent.auth.quotas import FREE_FULL_LIMIT, FREE_SCAN_LIMIT, history_limit
+from vuln_agent.auth.quotas import FREE_FULL_LIMIT, FREE_SCAN_LIMIT, PRO_SCAN_LIMIT, history_limit
 from vuln_agent.auth.tokens import public_user
 
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
@@ -126,8 +126,8 @@ async def plans() -> Dict[str, Any]:
                 "name": "Pro",
                 "interval": "month",
                 "price": 999,
-                "history": 500,
-                "scans": 500,
+                "history": PRO_SCAN_LIMIT,
+                "scans": PRO_SCAN_LIMIT,
                 "pdf": True,
             },
             {
@@ -135,8 +135,8 @@ async def plans() -> Dict[str, Any]:
                 "name": "Pro yearly",
                 "interval": "year",
                 "price": 7999,
-                "history": 500,
-                "scans": 500,
+                "history": PRO_SCAN_LIMIT,
+                "scans": PRO_SCAN_LIMIT,
                 "pdf": True,
             },
             {

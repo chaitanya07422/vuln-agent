@@ -1,19 +1,31 @@
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional
 
 from vuln_agent.auth.deps import effective_plan
 
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or str(raw).strip() == "":
+        return default
+    try:
+        return max(0, int(str(raw).strip()))
+    except ValueError:
+        return default
+
+
 # Lifetime guest scans (no account) — never refills
-GUEST_LIFETIME_LIMIT = 2
+GUEST_LIFETIME_LIMIT = _int_env("VULN_AGENT_GUEST_LIFETIME_LIMIT", 2)
 # First guest scan is full detail; second is teaser (1 finding)
-GUEST_FULL_LIMIT = 1
+GUEST_FULL_LIMIT = _int_env("VULN_AGENT_GUEST_FULL_LIMIT", 1)
 # Signed-in Free: first N owned scans get full detail
-FREE_FULL_LIMIT = 2
+FREE_FULL_LIMIT = _int_env("VULN_AGENT_FREE_FULL_LIMIT", 2)
 # Free can keep creating beyond full allotment (teaser results)
-FREE_SCAN_LIMIT = 10
-# Pro — generous create + history caps
-PRO_SCAN_LIMIT = 500
+FREE_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_SCAN_LIMIT", 10)
+# Pro create + history caps (override on Oracle via env)
+PRO_SCAN_LIMIT = _int_env("VULN_AGENT_PRO_SCAN_LIMIT", 20)
 
 HISTORY_LIMITS = {"free": FREE_SCAN_LIMIT, "pro": PRO_SCAN_LIMIT, "anon": 0}
 CREATE_LIMITS = {"free": FREE_SCAN_LIMIT, "pro": PRO_SCAN_LIMIT, "anon": GUEST_LIFETIME_LIMIT}
@@ -51,7 +63,8 @@ def quota_payload(
         "limit": limit,
         "used": used,
         "remaining": remaining,
-        "can_scan": remaining > 0 or mode == "pro",
+        # Pro is capped by VULN_AGENT_PRO_SCAN_LIMIT like Free — no unlimited bypass
+        "can_scan": remaining > 0,
         "deep_credits": deep_credits,
         "guest_lifetime": GUEST_LIFETIME_LIMIT,
         "free_limit": FREE_FULL_LIMIT,
