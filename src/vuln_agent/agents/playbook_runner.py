@@ -87,13 +87,27 @@ async def run_http_steps(
         if step.get("origin"):
             headers["Origin"] = step["origin"]
 
+        await ctx.audit_event(
+            agent=agent_name,
+            tool=method.lower(),
+            url=target,
+            path=path,
+            phase="start",
+        )
         resp = await ctx.tools.http_request(
             method=method,
             url=target,
             headers=headers or None,
             body=step.get("body"),
         )
-        await ctx.audit_event(agent=agent_name, tool="http_request", url=target, ok=resp.get("ok"))
+        await ctx.audit_event(
+            agent=agent_name,
+            tool=method.lower(),
+            url=target,
+            path=path,
+            ok=resp.get("ok"),
+            status=resp.get("status_code"),
+        )
 
         if not resp.get("ok"):
             continue
