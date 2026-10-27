@@ -8,7 +8,12 @@ from uuid import uuid4
 
 from vuln_agent.core.context import ScanContext, Scope
 from vuln_agent.core.finding import Finding
-from vuln_agent.core.progress import initial_agents_progress, set_agent_status
+from vuln_agent.core.progress import (
+    format_audit_detail,
+    initial_agents_progress,
+    set_agent_detail,
+    set_agent_status,
+)
 from vuln_agent.core.registry import load_agents
 from vuln_agent.llm.router import LLMRouter
 from vuln_agent.playbook_loader import PlaybookStore, default_playbook_store
@@ -130,6 +135,30 @@ class LeadRunner:
         await self._enqueue(scan_id, url, scope)
         return record
 
+    async def retry_scan(self, scan_id: str) -> Dict[str, Any]:
+        """Re-queue a failed scan in-place (no new quota / new id)."""
+        scan = await self.store.get(scan_id)
+        if scan.get("status") not in ("failed",):
+            raise ValueError("only failed scans can be retried")
+        url = str(scan.get("url") or "")
+        scope = Scope.from_url(url)
+        progress = initial_agents_progress(self.settings.enabled_agents)
+        updated = await self.store.update(
+            scan_id,
+            status="queued",
+            finished_at=None,
+            error=None,
+            findings=[],
+            audit=[],
+            fingerprint={},
+            report_md=None,
+            risk_path=None,
+            summary=None,
+            agents_progress=progress,
+        )
+        await self._enqueue(scan_id, url, scope)
+        return updated
+
     async def _enqueue(self, scan_id: str, url: str, scope: Scope) -> None:
         redis_url = getattr(self.settings, "redis_url", None)
         mongo_uri = getattr(self.settings, "mongo_uri", None)
@@ -167,12 +196,50 @@ class LeadRunner:
 
         ctx.persist_partial = _persist_partial
 
+        detail_dirty = False
+        last_detail_flush = 0.0
+        flush_task: asyncio.Task | None = None
+
+        async def _flush_progress(*, force: bool = False) -> None:
+            nonlocal detail_dirty, last_detail_flush, flush_task
+            now = asyncio.get_running_loop().time()
+            async with progress_lock:
+                if not force and not detail_dirty:
+                    return
+                if not force and (now - last_detail_flush) < 0.35:
+                    detail_dirty = True
+                    if flush_task is None or flush_task.done():
+
+                        async def _deferred() -> None:
+                            await asyncio.sleep(0.4)
+                            await _flush_progress(force=True)
+
+                        flush_task = asyncio.create_task(_deferred())
+                    return
+                snapshot = [dict(row) for row in progress]
+                detail_dirty = False
+                last_detail_flush = now
+            await self.store.update(scan_id, agents_progress=snapshot)
+
         async def _mark(agent_name: str, status: str) -> None:
             nonlocal progress
             async with progress_lock:
                 progress = set_agent_status(progress, agent_name, status)
-                snapshot = [dict(row) for row in progress]
-            await self.store.update(scan_id, agents_progress=snapshot)
+                detail_dirty = True
+            await _flush_progress(force=True)
+
+        async def _on_audit(**payload: Any) -> None:
+            nonlocal progress, detail_dirty
+            agent_name = str(payload.get("agent") or "")
+            if not agent_name:
+                return
+            line = format_audit_detail(**payload)
+            async with progress_lock:
+                progress = set_agent_detail(progress, agent_name, line)
+                detail_dirty = True
+            await _flush_progress()
+
+        ctx.record_audit = _on_audit
 
         try:
             agents = load_agents(self.settings.enabled_agents)
@@ -183,7 +250,7 @@ class LeadRunner:
             adapt = [a for a in agents if a.name == "adapt"]
             mid = [a for a in agents if a.name not in ("recon", "reporter", "js_audit", "adapt")]
 
-            async def _maybe_run(agent) -> None:
+            async def _maybe_run(agent, *, critical: bool = False) -> None:
                 tags_now = set((ctx.fingerprint or {}).get("tags") or [])
                 if agent.requires_tags and not set(agent.requires_tags).issubset(tags_now):
                     await _mark(agent.name, "skipped")
@@ -196,18 +263,25 @@ class LeadRunner:
                     await agent.run(ctx)
                 except Exception:
                     await _mark(agent.name, "failed")
-                    raise
+                    # Mid/adapt/reporter failures must not kill the whole scan —
+                    # UI can retry the job if status ends failed for other reasons.
+                    if critical:
+                        raise
+                    return
                 await _mark(agent.name, "done")
 
             for agent in recon:
-                await _maybe_run(agent)
+                await _maybe_run(agent, critical=True)
 
             for agent in js_audit:
                 await _maybe_run(agent)
 
             if mid:
                 await asyncio.wait_for(
-                    asyncio.gather(*[_maybe_run(a) for a in mid]),
+                    asyncio.gather(
+                        *[_maybe_run(a) for a in mid],
+                        return_exceptions=True,
+                    ),
                     timeout=self.settings.limits.scan_timeout_sec,
                 )
 

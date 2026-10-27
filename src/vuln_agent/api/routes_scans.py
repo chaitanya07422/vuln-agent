@@ -321,6 +321,32 @@ async def claim_scan(
     return _public_scan(updated, viewer=user)
 
 
+@router.post("/{scan_id}/retry", response_model=ScanSummary, status_code=202)
+async def retry_failed_scan(
+    scan_id: str,
+    request: Request,
+    user: Optional[Dict[str, Any]] = Depends(optional_user),
+) -> Dict[str, Any]:
+    """Re-run a failed scan without creating a new id / consuming quota again."""
+    store = request.app.state.store
+    lead = request.app.state.lead
+    try:
+        scan = await store.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    if scan.get("status") != "failed":
+        raise HTTPException(status_code=409, detail="only failed scans can be retried")
+    # Owner can always retry; guest/public share link can retry unowned scans.
+    if scan.get("owner_id"):
+        if not user or user.get("id") != scan.get("owner_id"):
+            raise HTTPException(status_code=403, detail="only the owner can retry this scan")
+    try:
+        updated = await lead.retry_scan(scan_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _public_scan(updated, include_claim=True, viewer=user)
+
+
 @router.post("/{scan_id}/rescan", status_code=202)
 async def rescan(
     scan_id: str,
