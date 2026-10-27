@@ -47,11 +47,14 @@ VERSION_PATTERNS: List[Tuple[re.Pattern[str], str, str]] = [
         "Express version visible in public assets — keep dependencies updated.",
     ),
     (
-        re.compile(r"next\.js\s*v?(\d+\.\d+\.\d+)|/_next/static/([a-zA-Z0-9_-]+)", re.I),
+        # Real version string only — do not treat /_next/static/css as a "version"
+        re.compile(r"next\.js\s*v?(\d+\.\d+\.\d+)", re.I),
         "Next.js",
-        "Next.js surface detected — track upstream security advisories for your release line.",
+        "Next.js version string detected — track upstream security advisories for your release line.",
     ),
 ]
+
+NEXT_SURFACE = re.compile(r"/_next/static/", re.I)
 
 
 class CveStackAgent(BaseAgent):
@@ -87,11 +90,8 @@ class CveStackAgent(BaseAgent):
             hits.append(key)
             # EOL-ish majors get medium; mere version disclosure low
             sev = "medium"
-            if product in ("nginx", "Express", "Next.js") and not (
-                product == "PHP" or (product == "WordPress" and ver.startswith(("3.", "4.")))
-            ):
-                if product in ("nginx", "Express", "Next.js"):
-                    sev = "low"
+            if product in ("nginx", "Express", "Next.js"):
+                sev = "low"
             if product == "jQuery" and ver.startswith(("1.", "2.")):
                 sev = "medium"
             if product == "PHP" and ver.startswith(("5.", "7.0", "7.1", "7.2", "7.3", "7.4")):
@@ -110,6 +110,21 @@ class CveStackAgent(BaseAgent):
                     tags=["cve", "supply-chain", product.lower()],
                 )
             )
+
+        # Framework surface without a concrete version → info only (not a vuln)
+        if not any(h.startswith("Next.js:") for h in hits) and NEXT_SURFACE.search(blob):
+            await ctx.emit_finding(
+                Finding(
+                    agent=self.name,
+                    severity="info",
+                    title="Next.js static surface detected",
+                    evidence_url=ctx.url,
+                    evidence_snippet="/_next/static/ present — no concrete version string",
+                    fix="Fingerprint only. Track Next.js advisories for your deployed release; hide version tokens where practical.",
+                    tags=["cve", "fingerprint", "next.js"],
+                )
+            )
+            hits.append("Next.js:surface")
 
         # Generator meta already partially covered — still useful
         gen = re.search(

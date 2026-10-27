@@ -1,4 +1,6 @@
+from vuln_agent.agents.cache_poison_hint import response_looks_cacheable
 from vuln_agent.agents.cookie_flags import (
+    is_bot_or_analytics_cookie,
     is_deletion_cookie,
     parse_cookie,
     split_set_cookie_header,
@@ -6,6 +8,7 @@ from vuln_agent.agents.cookie_flags import (
 from vuln_agent.agents.redirect_open import EVIL_HOST, _is_external_nav
 from vuln_agent.agents.ssrf_hint import _same_response, _strong_accept
 from vuln_agent.agents.subdomain_hint import is_wildcard_catch_all
+from vuln_agent.agents.xss_reflect_safe import _reflection_context
 
 
 def test_split_cookies_preserves_expires_comma():
@@ -75,3 +78,33 @@ def test_wildcard_dns_catch_all():
     assert is_wildcard_catch_all(shared, shared) is True
     assert is_wildcard_catch_all({"1.2.3.4"}, shared) is False
     assert is_wildcard_catch_all(set(), shared) is False
+
+
+def test_akamai_bot_cookies_skipped():
+    assert is_bot_or_analytics_cookie("_abck") is True
+    assert is_bot_or_analytics_cookie("bm_sz") is True
+    assert is_bot_or_analytics_cookie("ak_bmsc") is True
+    assert is_bot_or_analytics_cookie("session") is False
+    assert is_bot_or_analytics_cookie("nauk_at") is False
+
+
+def test_next_rsc_echo_not_html_xss():
+    body = (
+        'urlParts":["","profile-performance?q=scanleadXssMarker7f3a"],'
+        '"initialTree":["",{"children":["profile-performance"'
+    )
+    ctx = _reflection_context(body, "scanleadXssMarker7f3a")
+    assert ctx["rsc_echo"] is True
+    assert ctx["html_context"] is False
+
+
+def test_html_reflection_still_flagged():
+    body = "<div>hello scanleadXssMarker7f3a world</div>"
+    ctx = _reflection_context(body, "scanleadXssMarker7f3a")
+    assert ctx["html_context"] is True
+
+
+def test_cache_poison_respects_no_store():
+    assert response_looks_cacheable({"cache-control": "max-age=0, no-cache, no-store"}) is False
+    assert response_looks_cacheable({"cache-control": "public, max-age=3600"}) is True
+    assert response_looks_cacheable({"cache-control": "private, max-age=60"}) is False

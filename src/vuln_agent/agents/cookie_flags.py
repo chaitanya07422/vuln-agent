@@ -10,10 +10,13 @@ from vuln_agent.core.finding import Finding
 
 # Detect-only: inspect Set-Cookie flags. No session fixation or theft.
 
-# Bot/CDN / analytics — flag gaps are noise for "session theft" narratives
+# Bot/CDN / analytics — flag gaps are noise for "session theft" narratives.
+# These cookies are often intentionally readable by JS (no HttpOnly) or set by edges.
 SKIP_OR_INFO_PREFIXES = (
     "ak_bmsc",
     "bm_",
+    "_abck",
+    "abck",
     "_ga",
     "_gid",
     "_fbp",
@@ -23,7 +26,35 @@ SKIP_OR_INFO_PREFIXES = (
     "_clck",
     "_clsk",
     "AMP_",
+    "_hj",
+    "_uet",
+    "_tt_",
+    "Optanon",
+    "CookieConsent",
 )
+
+# Exact bot/edge names that do not start with the prefixes above
+SKIP_OR_INFO_EXACT = frozenset(
+    {
+        "ak_bmsc",
+        "_abck",
+        "abck",
+        "bm_sz",
+        "bm_sv",
+        "bm_mi",
+        "bm_lso",
+        "RT",  # Akamai mPulse
+    }
+)
+
+
+def is_bot_or_analytics_cookie(name: str) -> bool:
+    lname = (name or "").strip().lower()
+    if not lname:
+        return False
+    if lname in {n.lower() for n in SKIP_OR_INFO_EXACT}:
+        return True
+    return any(lname.startswith(p.lower()) or lname == p.rstrip("_").lower() for p in SKIP_OR_INFO_PREFIXES)
 
 MONTHS = {
     "jan": 1,
@@ -171,7 +202,7 @@ class CookieFlagsAgent(BaseAgent):
             lower = f"{name}={value};{attrs}".lower()
             lname = name.lower()
 
-            if any(lname.startswith(p) or lname == p.rstrip("_") for p in SKIP_OR_INFO_PREFIXES):
+            if is_bot_or_analytics_cookie(name):
                 # Bot/CDN cookies — skip missing-flag noise
                 continue
 

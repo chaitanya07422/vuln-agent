@@ -7,6 +7,21 @@ from vuln_agent.core.finding import Finding
 # Detect-only: unkeyed header reflection (Host / X-Forwarded-*). No poison delivery.
 
 
+def response_looks_cacheable(headers: dict) -> bool:
+    """True only when intermediate caches might store the response."""
+    cc = (headers.get("cache-control") or "").lower()
+    pragma = (headers.get("pragma") or "").lower()
+    if "no-store" in cc or "no-cache" in cc or "private" in cc:
+        return False
+    if "no-cache" in pragma:
+        return False
+    # Explicit zero / must-revalidate with max-age=0 → not a poison store
+    if "max-age=0" in cc.replace(" ", ""):
+        return False
+    # Surrogate / CDN hints that still say miss+uncacheable are handled via CC above
+    return True
+
+
 class CachePoisonHintAgent(BaseAgent):
     name = "cache_poison_hint"
     requires_tags: list = []
@@ -37,15 +52,31 @@ class CachePoisonHintAgent(BaseAgent):
             key = next(iter(headers))
             if marker in blob or "scanlead-poison-check" in blob or marker in (resp.get("url") or ""):
                 hits.append(key)
+                cacheable = response_looks_cacheable(resp_headers)
+                if cacheable:
+                    sev = "medium"
+                    fix = (
+                        "Do not trust X-Forwarded-* / Host overrides from clients; "
+                        "configure trusted proxy hops only; vary/cache keys must not include unkeyed headers."
+                    )
+                    title = f"Unkeyed header reflection: {key}"
+                else:
+                    sev = "info"
+                    fix = (
+                        "Header value is reflected but this response is not cacheable "
+                        "(no-store/no-cache/private). Strip untrusted X-Forwarded-* at the edge anyway."
+                    )
+                    title = f"Untrusted header reflected (not cacheable): {key}"
                 await ctx.emit_finding(
                     Finding(
                         agent=self.name,
-                        severity="medium",
-                        title=f"Unkeyed header reflection: {key}",
+                        severity=sev,  # type: ignore[arg-type]
+                        title=title,
                         evidence_url=ctx.url,
-                        evidence_snippet=f"{key} value reflected in response",
-                        fix="Do not trust X-Forwarded-* / Host overrides from clients; configure trusted proxy hops only.",
-                        tags=["cache", "headers"],
+                        evidence_snippet=f"{key} value reflected in response"
+                        + ("" if cacheable else "; Cache-Control prevents store"),
+                        fix=fix,
+                        tags=["cache", "headers"] + ([] if cacheable else ["hygiene"]),
                     )
                 )
 

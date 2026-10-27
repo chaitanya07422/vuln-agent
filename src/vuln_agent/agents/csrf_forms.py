@@ -4,10 +4,41 @@ import re
 from urllib.parse import urljoin
 
 from vuln_agent.agents.base import BaseAgent
+from vuln_agent.agents.cookie_flags import is_bot_or_analytics_cookie, parse_cookie, split_set_cookie_header
 from vuln_agent.core.context import ScanContext
 from vuln_agent.core.finding import Finding
 
 # Detect-only: CSRF token / SameSite gaps on state-changing forms. No forged cross-site posts.
+
+
+def _session_like_cookies(cookie_headers: list[str]) -> list[str]:
+    """Cookie names that look like app sessions (exclude bot/CDN/analytics)."""
+    names: list[str] = []
+    for raw in cookie_headers:
+        for part in split_set_cookie_header(raw) if "," in raw and "expires=" in raw.lower() else [raw]:
+            parsed = parse_cookie(part)
+            if not parsed:
+                continue
+            name, _value, _attrs, is_delete = parsed
+            if is_delete or is_bot_or_analytics_cookie(name):
+                continue
+            names.append(name)
+    return names
+
+
+def _cookie_missing_samesite(cookie_headers: list[str], name: str) -> bool:
+    lname = name.lower()
+    for raw in cookie_headers:
+        parts = split_set_cookie_header(raw) if "," in raw else [raw]
+        for part in parts:
+            parsed = parse_cookie(part)
+            if not parsed:
+                continue
+            n, _v, attrs, _d = parsed
+            if n.lower() != lname:
+                continue
+            return "samesite" not in f"{n};{attrs}".lower()
+    return False
 
 FORM_RE = re.compile(r"""<form\b([^>]*)>(.*?)</form>""", re.I | re.S)
 ACTION_RE = re.compile(r"""\baction=["']([^"']*)["']""", re.I)
@@ -35,10 +66,30 @@ class CsrfFormsAgent(BaseAgent):
 
         html = resp.get("body") or ""
         headers = {k.lower(): v for k, v in (resp.get("headers") or {}).items()}
-        cookie_blob = " ".join(resp.get("set_cookie") or []) or (headers.get("set-cookie") or "")
+        cookie_headers: list[str] = list(resp.get("set_cookie") or [])
+        if not cookie_headers and headers.get("set-cookie"):
+            cookie_headers = split_set_cookie_header(headers["set-cookie"])
+        cookie_blob = " ".join(cookie_headers)
         has_meta = bool(META_CSRF.search(html))
-        samesite = "samesite" in cookie_blob.lower()
-        samesite_none = "samesite=none" in cookie_blob.lower()
+        session_cookies = _session_like_cookies(cookie_headers)
+        session_missing_samesite = [
+            n for n in session_cookies if _cookie_missing_samesite(cookie_headers, n)
+        ]
+        samesite_none = False
+        for raw in cookie_headers:
+            parts = split_set_cookie_header(raw) if "," in raw else [raw]
+            for part in parts:
+                parsed = parse_cookie(part)
+                if not parsed:
+                    continue
+                name, _value, attrs, is_delete = parsed
+                if is_delete or is_bot_or_analytics_cookie(name):
+                    continue
+                if "samesite=none" in f"{name};{attrs}".lower():
+                    samesite_none = True
+                    break
+            if samesite_none:
+                break
 
         risky = []
         for fm in FORM_RE.finditer(html):
@@ -55,7 +106,8 @@ class CsrfFormsAgent(BaseAgent):
         ctx.fingerprint["csrf_forms"] = {
             "post_forms_missing_token": risky[:10],
             "meta_csrf": has_meta,
-            "samesite": samesite,
+            "session_cookies": session_cookies[:10],
+            "session_missing_samesite": session_missing_samesite[:10],
             "samesite_none": samesite_none,
         }
 
@@ -73,14 +125,16 @@ class CsrfFormsAgent(BaseAgent):
                 )
             )
 
-        if cookie_blob and not samesite:
+        # Only flag SameSite gaps on app session-like cookies — never Akamai/bot cookies alone
+        if session_missing_samesite:
+            shown = ", ".join(session_missing_samesite[:3])
             await ctx.emit_finding(
                 Finding(
                     agent=self.name,
                     severity="low",
                     title="Session cookie missing SameSite attribute",
                     evidence_url=ctx.url,
-                    evidence_snippet="Set-Cookie without SameSite",
+                    evidence_snippet=f"Set-Cookie without SameSite for: {shown}",
                     fix="Set SameSite=Lax (or Strict) on session cookies to reduce CSRF risk.",
                     tags=["csrf", "cookies"],
                 )
