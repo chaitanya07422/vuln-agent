@@ -244,6 +244,19 @@ class LeadRunner:
                 summary=ctx.summary,
                 agents_progress=progress,
             )
+        except asyncio.CancelledError:
+            # ARQ/job cancel — must persist failed or UI stays on "running" forever.
+            await self.store.update(
+                scan_id,
+                status="failed",
+                finished_at=_utc_now(),
+                error="CancelledError: job cancelled or timed out",
+                fingerprint=ctx.fingerprint,
+                findings=[f.model_dump() for f in ctx.findings],
+                audit=ctx.audit,
+                agents_progress=progress,
+            )
+            raise
         except Exception as exc:  # noqa: BLE001
             await self.store.update(
                 scan_id,

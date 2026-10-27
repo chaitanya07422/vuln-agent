@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections import Counter
 from typing import List
 
@@ -161,11 +162,18 @@ class ReporterAgent(BaseAgent):
                     role = candidate
                     break
         if role:
-            polished = await ctx.llm.complete(
-                role,  # type: ignore[arg-type]
-                format_reporter_user(brief=brief),
-                system=REPORTER_SYSTEM,
-            )
+            try:
+                # Don't let a slow LLM burn the whole ARQ job — keep template brief.
+                polished = await asyncio.wait_for(
+                    ctx.llm.complete(
+                        role,  # type: ignore[arg-type]
+                        format_reporter_user(brief=brief),
+                        system=REPORTER_SYSTEM,
+                    ),
+                    timeout=90.0,
+                )
+            except (asyncio.TimeoutError, Exception):
+                polished = None
             if polished and polished.strip().startswith("#"):
                 brief = polished.strip()
             elif polished and len(polished.strip()) > 80:
