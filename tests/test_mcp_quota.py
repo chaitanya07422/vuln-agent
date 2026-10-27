@@ -8,7 +8,7 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 # Isolate from Oracle .env limits during import of quotas via app
-os.environ["VULN_AGENT_FREE_SCAN_LIMIT"] = "5"
+os.environ["VULN_AGENT_FREE_SCAN_LIMIT"] = "3"
 os.environ["VULN_AGENT_FREE_MCP_SCAN_LIMIT"] = "1"
 os.environ.pop("VULN_AGENT_MONGO_URI", None)
 os.environ.pop("VULN_AGENT_REDIS_URL", None)
@@ -43,7 +43,7 @@ async def test_free_mcp_one_then_block_web_untouched(client_and_creds):
     assert q_web.status_code == 200
     body = q_web.json()
     assert body["channel"] == "web"
-    assert body["web"]["limit"] == 5
+    assert body["web"]["limit"] == 3
     assert body["mcp"]["limit"] == 1
     assert body["web"]["can_scan"] is True
     assert body["mcp"]["can_scan"] is True

@@ -134,8 +134,8 @@ def _free_exhausted_detail() -> Dict[str, Any]:
     return {
         "code": "FREE_QUOTA_EXCEEDED",
         "message": (
-            f"Free includes {FREE_FULL_LIMIT} full briefs "
-            f"(up to {FREE_SCAN_LIMIT} web scans). Upgrade to Pro or buy a ₹60 deep brief."
+            f"Free includes {FREE_FULL_LIMIT} full briefs + 1 locked preview "
+            f"({FREE_SCAN_LIMIT} web scans). Upgrade to Pro or buy a ₹60 deep brief."
         ),
         "upgrade": {"pro": True, "deep": True},
         "limit": FREE_SCAN_LIMIT,

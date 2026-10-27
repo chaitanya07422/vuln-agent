@@ -22,8 +22,9 @@ GUEST_LIFETIME_LIMIT = _int_env("VULN_AGENT_GUEST_LIFETIME_LIMIT", 2)
 GUEST_FULL_LIMIT = _int_env("VULN_AGENT_GUEST_FULL_LIMIT", 1)
 # Signed-in Free: first N *web* scans get full detail
 FREE_FULL_LIMIT = _int_env("VULN_AGENT_FREE_FULL_LIMIT", 2)
-# Free web create cap (MCP is a separate bucket)
-FREE_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_SCAN_LIMIT", 5)
+# Free web create cap: full briefs + 1 locked preview, then upgrade
+# (MCP is a separate bucket)
+FREE_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_SCAN_LIMIT", 3)
 # Free MCP / CLI create cap (API key auth) — independent of web
 FREE_MCP_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_MCP_SCAN_LIMIT", 1)
 # Pro create + history caps (override on Oracle via env)
