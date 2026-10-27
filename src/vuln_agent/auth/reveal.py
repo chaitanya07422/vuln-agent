@@ -44,7 +44,8 @@ def apply_reveal(
 
     if viewer and viewer.get("id") and viewer.get("id") == out.get("owner_id"):
         plan = (viewer.get("plan") or "free").lower()
-        if plan == "pro":
+        # Pro always full; deep-brief unlock / branded purchase also unlocks.
+        if plan == "pro" or out.get("unlocked_full") or out.get("branded_brief"):
             level = "full"
 
     out["detail_level"] = level

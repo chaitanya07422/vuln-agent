@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from vuln_agent.auth.deps import effective_plan, require_user
+from vuln_agent.auth.quotas import FREE_FULL_LIMIT, FREE_SCAN_LIMIT, history_limit
 from vuln_agent.auth.tokens import public_user
 
 router = APIRouter(prefix="/v1/billing", tags=["billing"])
@@ -114,10 +115,11 @@ async def plans() -> Dict[str, Any]:
                 "id": "free",
                 "name": "Free",
                 "price": 0,
-                "history": 5,
-                "scans": 5,
+                "history": FREE_SCAN_LIMIT,
+                "scans": FREE_FULL_LIMIT,
+                "full_briefs": FREE_FULL_LIMIT,
                 "pdf": False,
-                "note": "5 scans after signup · guest gets 2 first",
+                "note": "2 full Free briefs after signup · then preview (1 finding) · guest 1 full + 1 preview",
             },
             {
                 "id": "pro_monthly",
@@ -203,12 +205,14 @@ async def sync_billing(
     user: Dict[str, Any] = Depends(require_user),
 ) -> Dict[str, Any]:
     user = await sync_user_plan(request, user)
+    plan = effective_plan(user)
     return {
         "user": public_user(user),
-        "plan": effective_plan(user),
+        "plan": plan,
         "deep_credits": int(user.get("deep_credits") or 0),
-        "history_limit": 500 if effective_plan(user) == "pro" else 5,
-        "pdf": effective_plan(user) == "pro" or int(user.get("deep_credits") or 0) > 0,
+        "history_limit": history_limit(user),
+        "full_briefs": FREE_FULL_LIMIT if plan != "pro" else history_limit(user),
+        "pdf": plan == "pro" or int(user.get("deep_credits") or 0) > 0,
     }
 
 
@@ -224,10 +228,12 @@ async def billing_me(
     user: Dict[str, Any] = Depends(require_user),
 ) -> Dict[str, Any]:
     user = await sync_user_plan(request, user)
+    plan = effective_plan(user)
     return {
         "user": public_user(user),
-        "plan": effective_plan(user),
+        "plan": plan,
         "deep_credits": int(user.get("deep_credits") or 0),
-        "history_limit": 500 if effective_plan(user) == "pro" else 5,
-        "pdf": effective_plan(user) == "pro" or int(user.get("deep_credits") or 0) > 0,
+        "history_limit": history_limit(user),
+        "full_briefs": FREE_FULL_LIMIT if plan != "pro" else history_limit(user),
+        "pdf": plan == "pro" or int(user.get("deep_credits") or 0) > 0,
     }

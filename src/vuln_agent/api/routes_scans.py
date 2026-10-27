@@ -47,6 +47,8 @@ class AgentProgressRow(BaseModel):
     status: str
     started_at: Optional[str] = None
     finished_at: Optional[str] = None
+    detail: Optional[str] = None
+    step_at: Optional[str] = None
 
 
 class ScanSummary(BaseModel):
@@ -354,6 +356,41 @@ async def rescan(
     return _public_scan(record, include_claim=True, viewer=user)
 
 
+@router.post("/{scan_id}/unlock", response_model=ScanSummary)
+async def unlock_scan(
+    scan_id: str,
+    request: Request,
+    user: Dict[str, Any] = Depends(require_user),
+) -> Dict[str, Any]:
+    """Spend one deep-brief credit to unlock full detail on a teaser scan."""
+    store = request.app.state.store
+    try:
+        scan = await store.get(scan_id)
+    except ScanNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="scan not found") from exc
+    try:
+        user = await sync_user_plan(request, user)
+    except Exception:
+        pass
+    if scan.get("owner_id") and scan.get("owner_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="only the owner can unlock this scan")
+    if is_pro(user) or scan.get("unlocked_full") or scan.get("branded_brief"):
+        if not scan.get("owner_id"):
+            scan = await store.update(scan_id, owner_id=user["id"], claim_token=None)
+        return _public_scan(scan, viewer=user)
+    await consume_deep_credit(request, user)
+    fields: Dict[str, Any] = {
+        "detail_level": "full",
+        "unlocked_full": True,
+        "branded_brief": True,
+    }
+    if not scan.get("owner_id"):
+        fields["owner_id"] = user["id"]
+        fields["claim_token"] = None
+    updated = await store.update(scan_id, **fields)
+    return _public_scan(updated, viewer=user)
+
+
 @router.get("/{scan_id}/diff/{other_id}")
 async def scan_diff(
     scan_id: str,
@@ -422,14 +459,21 @@ async def get_report_html(
             user = await sync_user_plan(request, user)
         except Exception:
             pass
-        if is_pro(user) or scan.get("branded_brief"):
+        if is_pro(user) or scan.get("branded_brief") or scan.get("unlocked_full"):
             branded = True
-        elif int(user.get("deep_credits") or 0) > 0:
-            # Spend one deep-brief credit for a Pro-style branded HTML
+        elif int(user.get("deep_credits") or 0) > 0 and (
+            (scan.get("detail_level") or "full") == "teaser"
+        ):
+            # Spend one deep-brief credit → unlock full + branded HTML
             await consume_deep_credit(request, user)
             branded = True
             try:
-                await store.update(scan_id, branded_brief=True)
+                scan = await store.update(
+                    scan_id,
+                    branded_brief=True,
+                    unlocked_full=True,
+                    detail_level="full",
+                )
             except Exception:
                 pass
     revealed = apply_reveal(scan, viewer=user)
