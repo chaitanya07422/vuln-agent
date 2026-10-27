@@ -25,7 +25,7 @@ FREE_FULL_LIMIT = _int_env("VULN_AGENT_FREE_FULL_LIMIT", 2)
 # Free can keep creating beyond full allotment (teaser results)
 FREE_SCAN_LIMIT = _int_env("VULN_AGENT_FREE_SCAN_LIMIT", 10)
 # Pro create + history caps (override on Oracle via env)
-PRO_SCAN_LIMIT = _int_env("VULN_AGENT_PRO_SCAN_LIMIT", 20)
+PRO_SCAN_LIMIT = _int_env("VULN_AGENT_PRO_SCAN_LIMIT", 30)
 
 HISTORY_LIMITS = {"free": FREE_SCAN_LIMIT, "pro": PRO_SCAN_LIMIT, "anon": 0}
 CREATE_LIMITS = {"free": FREE_SCAN_LIMIT, "pro": PRO_SCAN_LIMIT, "anon": GUEST_LIFETIME_LIMIT}
