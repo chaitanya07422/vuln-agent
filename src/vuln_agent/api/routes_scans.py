@@ -97,9 +97,8 @@ def _public_scan(
 
 
 def _client_ip(request: Request) -> str:
-    forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    # Uvicorn only rewrites request.client when proxy_headers is enabled
+    # and the immediate proxy is explicitly trusted. Never parse raw XFF here.
     if request.client and request.client.host:
         return request.client.host
     return ""

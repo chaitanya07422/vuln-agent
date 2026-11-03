@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -11,13 +12,15 @@ from vuln_agent.api.routes_api_keys import router as api_keys_router
 from vuln_agent.api.routes_auth import router as auth_router
 from vuln_agent.api.routes_billing import router as billing_router
 from vuln_agent.api.routes_scans import router as scans_router
+from vuln_agent.api.routes_security import router as security_router
 from vuln_agent.auth.guest_quota import build_guest_quota_store
 from vuln_agent.auth.refresh_store import build_refresh_store
 from vuln_agent.auth.users import build_user_store
-
 from vuln_agent.core.lead import LeadRunner
 from vuln_agent.llm.factory import build_llm_router
 from vuln_agent.playbook_loader import default_playbook_store
+from vuln_agent.security.middleware import IPGuardMiddleware
+from vuln_agent.security.service import SecurityService
 from vuln_agent.settings import Settings
 from vuln_agent.store.mongo import build_store
 
@@ -28,6 +31,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     users = build_user_store(settings.mongo_uri)
     refresh_store = build_refresh_store(settings.redis_url)
     guest_quota = build_guest_quota_store(settings.redis_url)
+    security = SecurityService(settings.mongo_uri, settings.redis_url)
     playbooks = default_playbook_store(settings.config)
     llm = build_llm_router(settings.llm)
     lead = LeadRunner(settings, store, playbooks=playbooks, llm=llm)
@@ -38,6 +42,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.users = users
     app.state.refresh_store = refresh_store
     app.state.guest_quota = guest_quota
+    app.state.security = security
     app.state.oauth_states = {}
     app.state.lead = lead
     app.state.playbooks = playbooks
@@ -58,11 +63,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(IPGuardMiddleware, security_service=security)
 
     app.include_router(auth_router)
     app.include_router(billing_router)
     app.include_router(api_keys_router)
     app.include_router(scans_router)
+    app.include_router(security_router)
 
     web_dir = Path(__file__).resolve().parent / "web"
     if web_dir.is_dir():
@@ -97,12 +104,16 @@ def run() -> None:
     import uvicorn
 
     settings = Settings.load()
+    # Set VULN_AGENT_FORWARDED_ALLOW_IPS to the exact NPM proxy IP/CIDR.
+    # Never use '*' on a public API: it lets clients spoof forwarded IP headers.
     uvicorn.run(
         "vuln_agent.main:create_app",
         factory=True,
         host=settings.host,
         port=settings.port,
         reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips=os.getenv("VULN_AGENT_FORWARDED_ALLOW_IPS", "127.0.0.1"),
     )
 
 
